@@ -1,0 +1,48 @@
+{
+  "name": "y3",
+  "version": "0.1.0",
+  "description": "YI3ANG (Y3): strict 3D spatial DSL runtime and tooling",
+  "type": "module",
+  "bin": {
+    "y3": "./bin/y3.mjs"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "y3": "tsx src/cli.ts",
+    "validate": "tsx src/cli.ts validate",
+    "run": "tsx src/cli.ts run",
+    "trace": "tsx src/cli.ts trace"
+  },
+  "keywords": [
+    "dsl",
+    "language",
+    "3d",
+    "spatial",
+    "korean"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^14.0.3",
+    "monaco-editor": "^0.55.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "three": "^0.184.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.184.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.8",
+    "vitest": "^4.1.4"
+  }
+}

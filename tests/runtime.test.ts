@@ -1,0 +1,123 @@
+import { describe, expect, it } from "vitest";
+import { createInitialState, parseProgram, runProgram, type Program } from "../src/core";
+
+describe("runtime", () => {
+  it("supports push/add/sub/pop and output stack", () => {
+    const source = `@layer 0
+값은 7이다
+값은 2이다
+값을 더한다
+값은 3이다
+값을 뺀다
+값은 999이다
+값을 버린다
+출력은 값이다`;
+
+    const finalState = runProgram(parseProgram(source));
+    expect(finalState.output).toBe("6");
+  });
+
+  it("supports conditional true branch", () => {
+    const source = `@layer 0
+값은 1이다
+조건이면 위로
+아니다 아래로
+
+@layer 1
+값은 99이다
+출력은 "T"이다
+
+@layer -1
+값은 99이다
+출력은 "F"이다`;
+
+    const finalState = runProgram(parseProgram(source));
+    expect(finalState.output).toBe("T");
+  });
+
+  it("supports conditional false + else pair", () => {
+    const source = `@layer 0
+값은 0이다
+조건이면 위로
+아니다 아래로
+
+@layer 1
+값은 99이다
+출력은 "T"이다
+
+@layer -1
+값은 99이다
+값은 99이다
+출력은 "F"이다`;
+
+    const finalState = runProgram(parseProgram(source));
+    expect(finalState.output).toBe("F");
+  });
+
+  it("supports output char", () => {
+    const source = `@layer 0
+출력은 "Z"이다`;
+    const finalState = runProgram(parseProgram(source));
+    expect(finalState.output).toBe("Z");
+  });
+
+  it("halts on undefined coordinate", () => {
+    const source = `@layer 0
+값은 1이다
+조건이면 위로
+출력은 "A"이다
+
+@layer 1
+출력은 "B"이다`;
+
+    const finalState = runProgram(parseProgram(source));
+    expect(finalState.halted).toBe(true);
+    expect(finalState.output).toBe("");
+    expect(finalState.stepCount).toBe(2);
+  });
+
+  it("halts on bounds exit", () => {
+    const source = `@layer 0
+출력은 "A"이다`;
+
+    const finalState = runProgram(parseProgram(source));
+    expect(finalState.halted).toBe(true);
+    expect(finalState.output).toBe("A");
+    expect(finalState.stepCount).toBe(1);
+  });
+
+  it("halts at step limit", () => {
+    const program: Program = {
+      cells: new Map([
+        [
+          "0,0,0",
+          {
+            x: 0,
+            y: 0,
+            z: 0,
+            instruction: { type: "NOOP" },
+            raw: "NOOP",
+            sourceLine: 1,
+          },
+        ],
+      ]),
+      bounds: {
+        minX: 0,
+        maxX: 0,
+        minY: 0,
+        maxY: 0,
+        minZ: 0,
+        maxZ: 0,
+      },
+    };
+
+    const initial = createInitialState();
+    initial.dx = 0;
+    initial.dy = 0;
+    initial.dz = 0;
+
+    const finalState = runProgram(program, initial);
+    expect(finalState.halted).toBe(true);
+    expect(finalState.stepCount).toBe(10000);
+  });
+});
