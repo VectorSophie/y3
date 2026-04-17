@@ -1,0 +1,14 @@
+node_modules/
+coverage/
+.vite/
+
+src/
+tests/
+
+index.html
+vite.config.ts
+vitest.config.ts
+tsconfig.json
+tsup.config.ts
+
+*.log

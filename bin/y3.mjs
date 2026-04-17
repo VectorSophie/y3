@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
-const cliPath = resolve(currentDir, "../src/cli.ts");
+const cliPath = resolve(currentDir, "../dist/cli.js");
 
-const result = spawnSync(process.execPath, ["--import", "tsx", cliPath, ...process.argv.slice(2)], {
+if (!existsSync(cliPath)) {
+  console.error("y3 package is not built yet. Run: npm run build:package");
+  process.exit(1);
+}
+
+const result = spawnSync(process.execPath, [cliPath, ...process.argv.slice(2)], {
   stdio: "inherit",
 });
 

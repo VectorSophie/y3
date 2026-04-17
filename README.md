@@ -36,6 +36,20 @@ npm link
 y3 run examples/branch-true.y3
 ```
 
+Publish-ready packaging check:
+
+```bash
+npm run build:package
+npm pack --dry-run
+```
+
+After publishing, global usage is:
+
+```bash
+npm install -g y3
+y3 validate ./program.y3
+```
+
 ## Commands
 
 - `y3 validate file.y3`

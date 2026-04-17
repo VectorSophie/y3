@@ -3,20 +3,45 @@
   "version": "0.1.0",
   "description": "YI3ANG (Y3): strict 3D spatial DSL runtime and tooling",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "bin": {
     "y3": "./bin/y3.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE",
+    "docs",
+    "examples"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:package": "tsup",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "y3": "tsx src/cli.ts",
+    "y3:dev": "tsx src/cli.ts",
     "validate": "tsx src/cli.ts validate",
     "run": "tsx src/cli.ts run",
-    "trace": "tsx src/cli.ts trace"
+    "trace": "tsx src/cli.ts trace",
+    "validate:dist": "node dist/cli.js validate",
+    "run:dist": "node dist/cli.js run",
+    "trace:dist": "node dist/cli.js trace",
+    "prepublishOnly": "npm run test && npm run typecheck && npm run build:package"
   },
   "keywords": [
     "dsl",
@@ -40,6 +65,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.184.0",
     "@vitejs/plugin-react": "^6.0.1",
+    "tsup": "^8.5.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "vite": "^8.0.8",
