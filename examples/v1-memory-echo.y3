@@ -1,0 +1,6 @@
+@macro GET_INPUT=입력은 값이다
+@layer 0 [control]
+@use GET_INPUT
+칸 값으로 넣는다
+칸 값을 가져온다
+출력은 값이다

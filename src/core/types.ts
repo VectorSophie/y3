@@ -2,11 +2,24 @@ export type Vec3 = { dx: number; dy: number; dz: number };
 
 export type Instruction =
   | { type: "PUSH"; value: number }
+  | { type: "INPUT_STACK" }
   | { type: "ADD" }
   | { type: "SUB" }
   | { type: "POP" }
   | { type: "COND"; direction: Vec3 }
   | { type: "ELSE"; direction: Vec3 }
+  | { type: "ROTATE_RIGHT" }
+  | { type: "ROTATE_LEFT" }
+  | { type: "ROTATE_UP" }
+  | { type: "ROTATE_DOWN" }
+  | { type: "PORTAL"; target: { x: number; y: number; z: number } }
+  | { type: "MEMORY_MOVE_RIGHT" }
+  | { type: "MEMORY_MOVE_LEFT" }
+  | { type: "MEMORY_INC" }
+  | { type: "MEMORY_DEC" }
+  | { type: "MEMORY_GET" }
+  | { type: "MEMORY_SET" }
+  | { type: "MEMORY_COND_ZERO"; direction: Vec3 }
   | { type: "OUTPUT_CHAR"; value: string }
   | { type: "OUTPUT_STACK" }
   | { type: "NOOP" };
@@ -22,6 +35,7 @@ export type Cell = {
 
 export type Program = {
   cells: Map<string, Cell>;
+  layerMetadata: Map<number, string | null>;
   bounds: {
     minX: number;
     maxX: number;
@@ -40,6 +54,9 @@ export type MachineState = {
   dy: number;
   dz: number;
   stack: number[];
+  input: number[];
+  memory: Map<number, number>;
+  memoryPointer: number;
   output: string;
   stepCount: number;
   halted: boolean;
@@ -52,5 +69,11 @@ export type StepTrace = {
   dir: Vec3;
   cell: string;
   stack: number[];
+  memoryPointer: number;
+  memoryValue: number;
   output: string;
+};
+
+export type RunOptions = {
+  maxSteps?: number;
 };

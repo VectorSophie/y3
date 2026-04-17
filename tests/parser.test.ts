@@ -49,4 +49,35 @@ describe("parser", () => {
 
     expect(() => parseProgram(source)).toThrowError(/misplaced 아니다/);
   });
+
+  it("parses semantic layer labels and strict macros", () => {
+    const source = `@macro PUSH_ONE=값은 1이다
+@layer 0 [control]
+@use PUSH_ONE
+출력은 값이다`;
+
+    const program = parseProgram(source);
+    expect(program.layerMetadata.get(0)).toBe("control");
+    expect(program.cells.get("0,0,0")?.raw).toBe("값은 1이다");
+    expect(program.cells.get("0,1,0")?.raw).toBe("출력은 값이다");
+  });
+
+  it("rejects unknown macro reference", () => {
+    const source = `@layer 0
+@use UNKNOWN`;
+
+    expect(() => parseProgram(source)).toThrowError(/unknown macro/);
+  });
+
+  it("parses v1 spatial and memory instructions", () => {
+    const source = `@layer 0
+입력은 값이다
+방향을 오른쪽으로 회전한다
+이동은 (0,0,0)로
+칸 값을 하나 늘린다
+칸 값이 0이면 위로`;
+
+    const program = parseProgram(source);
+    expect(program.cells.size).toBe(5);
+  });
 });

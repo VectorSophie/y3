@@ -7,6 +7,7 @@ export function formatTraceEntry(entry: StepTrace): string {
     `dir=(${entry.dir.dx},${entry.dir.dy},${entry.dir.dz})`,
     `cell="${entry.cell}"`,
     `stack=[${entry.stack.join(",")}]`,
+    `mem=(${entry.memoryPointer}:${entry.memoryValue})`,
     `output="${entry.output}"`,
   ].join("\n");
 }

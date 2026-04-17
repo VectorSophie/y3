@@ -251,6 +251,7 @@ export function App() {
           <div>position: {currentTrace ? `(${currentTrace.pos.x},${currentTrace.pos.y},${currentTrace.pos.z})` : "-"}</div>
           <div>direction: {currentTrace ? `(${currentTrace.dir.dx},${currentTrace.dir.dy},${currentTrace.dir.dz})` : "-"}</div>
           <div>stack: {currentTrace ? `[${currentTrace.stack.join(",")}]` : "[]"}</div>
+          <div>memory: {currentTrace ? `ptr=${currentTrace.memoryPointer}, val=${currentTrace.memoryValue}` : "ptr=0, val=0"}</div>
           <div>output: {currentTrace ? currentTrace.output : ""}</div>
           <div>step: {currentTrace ? currentTrace.step : 0}</div>
           <div>trail points: {sceneRef.current?.trail.children.length ?? 0}</div>
