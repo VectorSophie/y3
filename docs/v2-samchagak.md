@@ -3,7 +3,7 @@
 > 사각형의내부의사각형의내부의사각형의내부의사각형의내부의사각형.
 > — 이상, 「건축무한육면각체」 (1932)
 
-Status: concept. This document replaces section 5 of `design-review-v2.md` and goes
+Status: concept. Its language model is superseded by `v2-space-and-time.md`; see §12 there. This document replaces section 5 of `design-review-v2.md` and goes
 further. It doesn't try to stay compatible with v1. Only the **verse register** (§3)
 descends from v1's sentences.
 

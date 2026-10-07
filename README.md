@@ -107,3 +107,4 @@ The IDE includes:
 - `docs/roadmap.md`
 - `docs/design-review-v2.md` (review of v1 + first v2 proposal)
 - `docs/v2-samchagak.md` (삼차각설계도: Yi Sang–based v2 concept)
+- `docs/v2-space-and-time.md` (v2 proposal: container, planes, orientation, tense-as-constraint)
