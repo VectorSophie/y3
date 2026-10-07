@@ -105,3 +105,4 @@ The IDE includes:
 - `docs/turing-completeness.md`
 - `docs/visualization.md`
 - `docs/roadmap.md`
+- `docs/design-review-v2.md` (review + v2 proposal)
