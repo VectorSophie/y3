@@ -105,4 +105,5 @@ The IDE includes:
 - `docs/turing-completeness.md`
 - `docs/visualization.md`
 - `docs/roadmap.md`
-- `docs/design-review-v2.md` (review + v2 proposal)
+- `docs/design-review-v2.md` (review of v1 + first v2 proposal)
+- `docs/v2-samchagak.md` (삼차각설계도: Yi Sang–based v2 concept)

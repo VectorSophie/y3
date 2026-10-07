@@ -228,6 +228,8 @@ Golden tests (an example program plus its expected output and trace) are the che
 
 ## 5. Identity brainstorm (bigger swings)
 
+> Superseded by `docs/v2-samchagak.md`, which develops these ideas into a full concept.
+
 The name YI3ANG reads like **이상 (Yi Sang, 1910–1937)**: the avant-garde poet who trained as an architect and wrote geometric, numeric, unspaced poems. If that is the intent, his work offers a ready-made design vocabulary that fits a strict, spatial, literary language. Each idea below can be adopted on its own.
 
 1. **띄어쓰기 없음 (no spacing) as canonical form.** Normalize sentences by removing whitespace before matching, so `값을더한다` ≡ `값을 더한다`. Matching stays exact, and the language becomes whitespace-insensitive in homage to Yi Sang's unspaced style.
