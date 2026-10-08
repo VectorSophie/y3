@@ -57,7 +57,7 @@ export function step(space: Space, state: MachineState, decode: Decoder): StepRe
 
   const steps = state.steps + 1;
   const isEnd = instruction.op === "end";
-  const next = isEnd ? state.pose : nextPose(state.pose, instruction);
+  const next = nextPose(state.pose, instruction);
   const entry: TraceEntry = {
     step: steps,
     at: position,

@@ -152,6 +152,13 @@ describe.each(ALL_ORIENTATIONS.map((o) => [orientationLabel(o), o] as const))("o
     }
   });
 
+  it("stays exactly where it is on END, and advances one cell on NOP", () => {
+    const pose = { position: { x: 4, y: 5, z: 6 }, orientation: o };
+    expect(nextPose(pose, { op: "end" })).toEqual(pose);
+    const v = vectorOf(o.forward);
+    expect(nextPose(pose, { op: "nop" })).toEqual({ position: { x: 4 + v.x, y: 5 + v.y, z: 6 + v.z }, orientation: o });
+  });
+
   it("applies a turn before this step's advance (no late turns)", () => {
     const pose = { position: { x: 0, y: 0, z: 0 }, orientation: o };
     for (const which of TURNS) {

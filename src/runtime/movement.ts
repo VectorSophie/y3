@@ -2,8 +2,8 @@ import type { Pose, Coordinate } from "../space/manifest";
 import { face, turn, vectorOf, worldDirection, type Direction } from "../space/orientation";
 import type { Instruction } from "./instructions";
 
-// Where an instruction leaves the pointer. Every instruction except END moves exactly
-// one cell: forward by default, or as the instruction says.
+// Where an instruction leaves the pointer. END leaves it exactly where it is; every
+// other instruction moves exactly one cell: forward by default, or as it says.
 
 export function offset(position: Coordinate, direction: Direction): Coordinate {
   const v = vectorOf(direction);
@@ -13,8 +13,9 @@ export function offset(position: Coordinate, direction: Direction): Coordinate {
 export function nextPose(pose: Pose, instruction: Instruction): Pose {
   const { position, orientation } = pose;
   switch (instruction.op) {
-    case "nop":
     case "end":
+      return pose;
+    case "nop":
       return { position: offset(position, orientation.forward), orientation };
     case "turn": {
       // The new orientation applies to this step's advance.
