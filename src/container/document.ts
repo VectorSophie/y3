@@ -1,6 +1,7 @@
 import type { DocumentAst } from "../language/ast";
 import type { Diagnostic } from "../language/diagnostics";
 import { parseDocument } from "../language/document-parser";
+import { checkStart, interpretManifest, type Manifest } from "../space/manifest";
 import { buildSpace, type Space } from "../space/volume";
 
 // A .y3 file is one plain-text document holding the whole space: front matter
@@ -11,16 +12,23 @@ export const Y3_EXTENSION = ".y3";
 export type LoadedDocument = {
   ast: DocumentAst | null;
   space: Space | null;
+  manifest: Manifest | null;
   diagnostics: Diagnostic[];
 };
 
 export function loadDocument(source: string): LoadedDocument {
   const parsed = parseDocument(source);
   if (!parsed.ok) {
-    return { ast: null, space: null, diagnostics: parsed.diagnostics };
+    return { ast: null, space: null, manifest: null, diagnostics: parsed.diagnostics };
   }
   const built = buildSpace(parsed.ast);
-  return { ast: parsed.ast, space: built.space, diagnostics: built.diagnostics };
+  const frontMatterSpan = parsed.ast.frontMatter?.span;
+  const interpreted = interpretManifest(parsed.ast.frontMatter?.text ?? null, frontMatterSpan);
+  const diagnostics = [...built.diagnostics, ...interpreted.diagnostics];
+  if (built.space && interpreted.manifest) {
+    diagnostics.push(...checkStart(built.space, interpreted.manifest, frontMatterSpan));
+  }
+  return { ast: parsed.ast, space: built.space, manifest: interpreted.manifest, diagnostics };
 }
 
 // v2 documents are made of planes; v1 files never contain "⟦".

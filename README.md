@@ -37,7 +37,12 @@ y3 unpack program.y3                     # → program/{META-INF,space,planes}
 y3 pack program/                         # → program.y3
 ```
 
-M0 does not run v2 programs yet; sentences are carried as text until M2. `validate`,
+**M1** adds the spatial machine (`src/runtime/`): the 24 cube orientations, turns,
+relative steps and floor transitions, the start pose and step limit from the manifest
+(`[start] plane/cell/facing/up`, `[limits] steps`), and the outcomes `HALT` (an
+explicit end), `VOID`, `STEP_LIMIT` and `FAULT`. The machine is driven by decoded
+instructions, not Korean; v2 programs become runnable when M2 adds sentence semantics.
+Until then, sentences are carried as text. `validate`,
 `run` and `trace` below are the v1 interpreter, which reads the v1 examples in
 `examples/v1/`. v2 examples are in `examples/v2/`.
 
