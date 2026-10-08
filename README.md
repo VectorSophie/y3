@@ -31,20 +31,39 @@ document model) is done: a `.y3` file is one plain-text space made of Y2 planes.
 - Indentation and gaps are projection only; the parser never reads them.
 
 ```bash
-y3 check program.y3                      # structure and references
+y3 check program.y3                      # structure, manifest, and sentences
 y3 fmt program.y3 [--projection flat|perspective|strong] [--write | --check]
 y3 unpack program.y3                     # → program/{META-INF,space,planes}
 y3 pack program/                         # → program.y3
 ```
 
-**M1** adds the spatial machine (`src/runtime/`): the 24 cube orientations, turns,
-relative steps and floor transitions, the start pose and step limit from the manifest
-(`[start] plane/cell/facing/up`, `[limits] steps`), and the outcomes `HALT` (an
-explicit end), `VOID`, `STEP_LIMIT` and `FAULT`. The machine is driven by decoded
-instructions, not Korean; v2 programs become runnable when M2 adds sentence semantics.
-Until then, sentences are carried as text. `validate`,
-`run` and `trace` below are the v1 interpreter, which reads the v1 examples in
-`examples/v1/`. v2 examples are in `examples/v2/`.
+**M1** added the spatial machine (`src/runtime/`): 24 cube orientations, turns, relative
+steps, floor transitions, and the start pose and step limit from the manifest.
+
+**M2** makes present tense execute. v2 programs run, with `bigint` values held in
+named nouns, arithmetic, output, movement, conditionals and anchor-based loops
+(`docs/v2-present-tense.md` lists the exact sentence set):
+
+```
+⟦
+[값은 3이다.]
+[여기가 처음이다.]
+[값을 말한다.]
+[값에서 1을 뺀다.]
+[값이 0이 아니면 끝은 처음이다.]
+[끝이다.]
+⟧
+```
+
+```bash
+y3 run countdown.y3      # 3, 2, 1
+y3 trace countdown.y3    # every executed cell and its effects
+```
+
+Past and future tense (`였다`, `일 것이다`) are recognised but refused until M3.
+`run` and `trace` choose v1 or v2 from the file: v2 documents contain planes. The
+sections below describe v1, whose examples are in `examples/v1/`; v2 examples are in
+`examples/v2/`.
 
 ## Why this format (v1)
 
@@ -152,3 +171,4 @@ The IDE includes:
 - `docs/design-review-v2.md` (review of v1 + first v2 proposal)
 - `docs/v2-samchagak.md` (삼차각설계도: Yi Sang–based v2 concept)
 - `docs/v2-space-and-time.md` (accepted v2 design: container, planes, orientation, tense-as-constraint)
+- `docs/v2-present-tense.md` (the M2 sentence set)

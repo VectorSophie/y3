@@ -2,6 +2,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { basename, dirname, join, relative, sep } from "node:path";
 import type { Command } from "commander";
 import { loadDocument } from "../container/document";
+import { compileProgram } from "../semantics/program";
+import { runProgram } from "../runtime/interpreter";
+import { formatProgramTrace } from "../runtime/program-trace";
+import { describeOutcome, EXIT_CODES } from "../runtime/outcomes";
 import { packDocument, unpackDocument, type FileMap } from "../container/pack";
 import { formatDocument } from "../format/formatter";
 import { isProjection, PROJECTIONS } from "../format/projection";
@@ -19,15 +23,42 @@ function report(error: unknown): never {
   fatal(error instanceof Error ? error.message : String(error));
 }
 
-function loadOrExit(filePath: string) {
-  const loaded = loadDocument(readFileSync(filePath, "utf8"));
+function loadOrExit(filePath: string, source = readFileSync(filePath, "utf8")) {
+  const loaded = loadDocument(source);
   for (const diagnostic of loaded.diagnostics) {
     console.error(formatDiagnostic(diagnostic, filePath));
   }
   if (hasErrors(loaded.diagnostics) || !loaded.ast) {
     process.exit(1);
   }
-  return { ast: loaded.ast, space: loaded.space };
+  return { ast: loaded.ast, space: loaded.space, manifest: loaded.manifest };
+}
+
+// Loads and compiles a v2 program; prints every diagnostic and exits on errors.
+function compileOrExit(filePath: string, source?: string) {
+  const { ast, space, manifest } = loadOrExit(filePath, source);
+  if (!space || !manifest) process.exit(1);
+  const compiled = compileProgram(ast, space);
+  for (const diagnostic of compiled.diagnostics) {
+    console.error(formatDiagnostic(diagnostic, filePath));
+  }
+  if (!compiled.program) process.exit(1);
+  return { program: compiled.program, manifest };
+}
+
+export function runV2(filePath: string, source: string, options: { maxSteps?: number; input?: string; trace: boolean }): void {
+  if (options.input !== undefined) {
+    fatal("v2 programs do not read input yet (듣는다 is not part of the present-tense core)");
+  }
+  const { program, manifest } = compileOrExit(filePath, source);
+  const result = runProgram(program, manifest, { maxSteps: options.maxSteps });
+  if (options.trace) {
+    process.stdout.write(formatProgramTrace(result));
+  } else {
+    for (const line of result.output) process.stdout.write(`${line}\n`);
+    if (result.outcome.status !== "HALT") console.error(describeOutcome(result.outcome));
+  }
+  process.exitCode = EXIT_CODES[result.outcome.status];
 }
 
 function readTree(root: string): FileMap {
@@ -49,11 +80,11 @@ function readTree(root: string): FileMap {
 export function registerV2Commands(cli: Command): void {
   cli
     .command("check")
-    .description("check a v2 document's structure (planes, references, the ※ section)")
+    .description("check a v2 document: structure, manifest, and every sentence")
     .argument("<file>", "path to a .y3 document")
     .action((filePath: string) => {
-      const { space } = loadOrExit(filePath);
-      const layers = space?.layers ?? [];
+      const { program } = compileOrExit(filePath);
+      const layers = program.space.layers;
       const sizes = layers.map((layer) => `${layer.plane.width}×${layer.plane.height}`).join(", ");
       console.log(`ok: ${layers.length} layer(s) [${sizes}]`);
     });

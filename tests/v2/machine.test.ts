@@ -82,8 +82,8 @@ describe("running and ending", () => {
   it("passes only non-blank sentences to the decoder, with their position", () => {
     const { space, manifest } = load("⟦\n[a] [ ]\n[ ] [ ]\n[end] [ ]\n⟧");
     const calls: [string, Coordinate][] = [];
-    const decode: Decoder = (sentence, at) => {
-      calls.push([sentence, at]);
+    const decode: Decoder = (sentence, pose) => {
+      calls.push([sentence, pose.position]);
       return sentence === "end" ? { op: "end" } : { op: "nop" };
     };
     expect(run(space, manifest, decode).outcome.status).toBe("HALT");

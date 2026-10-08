@@ -45,7 +45,7 @@ export function step(space: Space, state: MachineState, decode: Decoder): StepRe
   const sentence = here.cell.sentence;
   let instruction: Instruction = { op: "nop" };
   if (sentence !== null) {
-    const decoded = decode(sentence, position);
+    const decoded = decode(sentence, state.pose);
     if (isDecodeError(decoded)) {
       return {
         state: { ...state, outcome: { status: "FAULT", steps: state.steps, at: position, message: decoded.error } },

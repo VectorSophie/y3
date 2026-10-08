@@ -1,0 +1,12 @@
+# Straight-line arithmetic and output. Values live in named nouns; there is no stack.
+⟦
+[값은 7이다.]
+[값에 5를 더한다.]
+[값에서 2를 뺀다.]
+[합은 값이다.]
+[합에 값을 더한다.]
+["값과 합"을 말한다.]
+[값을 말한다.]
+[합을 말한다.]
+[끝이다.]
+⟧

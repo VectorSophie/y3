@@ -10,7 +10,8 @@ import {
   runProgram,
   runProgramWithTrace,
 } from "./v1/core";
-import { registerV2Commands } from "./cli/v2-commands";
+import { registerV2Commands, runV2 } from "./cli/v2-commands";
+import { looksLikeV2 } from "./container/document";
 
 function readSource(filePath: string): string {
   return readFileSync(filePath, "utf8");
@@ -85,13 +86,18 @@ cli
 
 cli
   .command("run")
-  .description("v1: run a v1 program")
+  .description("run a program (v2 documents with planes, or v1 programs)")
   .argument("<file>", "Path to .y3 file")
   .option("-i, --input <values>", "Space/comma separated integer input values")
   .option("--max-steps <count>", "Execution step limit (default: 10000)")
   .action((filePath: string, options: { input?: string; maxSteps?: string }) => {
     try {
-      const program = parseProgram(readSource(filePath));
+      const source = readSource(filePath);
+      if (looksLikeV2(source)) {
+        runV2(filePath, source, { maxSteps: parseMaxSteps(options.maxSteps), input: options.input, trace: false });
+        return;
+      }
+      const program = parseProgram(source);
       const initialState = createInitialState({ input: parseInputValues(options.input) });
       const finalState = runProgram(program, initialState, { maxSteps: parseMaxSteps(options.maxSteps) });
       process.stdout.write(finalState.output);
@@ -105,13 +111,18 @@ cli
 
 cli
   .command("trace")
-  .description("v1: trace a v1 program")
+  .description("trace a program step by step (v2 documents with planes, or v1 programs)")
   .argument("<file>", "Path to .y3 file")
   .option("-i, --input <values>", "Space/comma separated integer input values")
   .option("--max-steps <count>", "Execution step limit (default: 10000)")
   .action((filePath: string, options: { input?: string; maxSteps?: string }) => {
     try {
-      const program = parseProgram(readSource(filePath));
+      const source = readSource(filePath);
+      if (looksLikeV2(source)) {
+        runV2(filePath, source, { maxSteps: parseMaxSteps(options.maxSteps), input: options.input, trace: true });
+        return;
+      }
+      const program = parseProgram(source);
       const initialState = createInitialState({ input: parseInputValues(options.input) });
       const result = runProgramWithTrace(program, initialState, { maxSteps: parseMaxSteps(options.maxSteps) });
       for (const entry of result.trace) {

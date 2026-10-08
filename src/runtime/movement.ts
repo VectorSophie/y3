@@ -15,6 +15,8 @@ export function nextPose(pose: Pose, instruction: Instruction): Pose {
   switch (instruction.op) {
     case "end":
       return pose;
+    case "jump":
+      return instruction.to;
     case "nop":
       return { position: offset(position, orientation.forward), orientation };
     case "turn": {

@@ -26,7 +26,7 @@ const ROOT = join(__dirname, "..", "..");
 
 // Every v2 example and conformance fixture in the repository.
 export function fixtures(): { path: string; source: string }[] {
-  const dirs = ["examples/v2", "tests/conformance/temporal"];
+  const dirs = ["examples/v2", "tests/conformance/present", "tests/conformance/temporal"];
   return dirs.flatMap((dir) =>
     readdirSync(join(ROOT, dir))
       .filter((file) => file.endsWith(".y3"))
