@@ -19,8 +19,8 @@ export type SymbolInfo = {
   readonly label: string; // α1 (미정), β2 (channel), ε3 (끝의 N)
   readonly noun: string; // the noun that declared it
   readonly origin: SymbolOrigin;
-  // Set when the symbol's own cycle closed on itself: what came back to it was built
-  // from it with no present-tense literal or input. A resolved self-loop is self-caused.
+  // Set when a cycle closed back onto this symbol with no external cause (see
+  // carriesCause), naming the edge that closed it. A resolved self-loop is self-caused.
   selfLoop: string | null;
   readonly born: number; // step
   sort: "unknown" | "int" | "text"; // fixed by arithmetic or by an equation; says nothing about the value

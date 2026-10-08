@@ -2,7 +2,7 @@ import type { Coordinate, Manifest, Pose } from "../space/manifest";
 import { coordinateKey, type CompiledProgram } from "../semantics/program";
 import { renderValue, sameValue, type Act, type ConcreteValue, type Operand, type Operation } from "../semantics/operations";
 import { TemporalStore, type Resolution, type SymbolInfo } from "../temporal/store";
-import { literal, symbolsOf, TermError, type SymbolicTerm, type SymbolId } from "../temporal/terms";
+import { carriesCause, literal, symbolsOf, TermError, type SymbolicTerm } from "../temporal/terms";
 import type { DecodeResult, Instruction } from "./instructions";
 import { createMachine, step } from "./machine";
 import type { ProgramOutcome, TemporalStatus } from "./program-outcome";
@@ -16,15 +16,15 @@ import type { TraceEntry } from "./trace";
 // solver. The interpreter never sees Korean, the machine never sees values, and the
 // store never decides control flow.
 
-// A noun's current binding. A name with no binding is unbound. `caused` records whether
-// any present-tense literal (or input) went into a symbolic value; a value built only
-// from symbols has no cause of its own.
+// A noun's current binding. A name with no binding is unbound. Whether a binding has an
+// operational cause is read from its normal form (carriesCause), never from the syntax
+// that built it.
 type Binding =
   | { readonly kind: "concrete"; readonly value: ConcreteValue }
-  | { readonly kind: "symbolic"; readonly term: SymbolicTerm; readonly caused: boolean };
+  | { readonly kind: "symbolic"; readonly term: SymbolicTerm };
 
 type Promise = { readonly name: string; readonly term: SymbolicTerm; readonly madeAt: number; readonly sentence: string };
-type EndRead = { readonly name: string; readonly symbol: SymbolicTerm; readonly id: SymbolId; readonly madeAt: number; readonly sentence: string };
+type EndRead = { readonly name: string; readonly symbol: SymbolicTerm; readonly madeAt: number; readonly sentence: string };
 type FixedPoint = { readonly madeAt: number; readonly sentence: string };
 
 // One iteration of a loop, or the whole run. It remembers how it began, what it wrote,
@@ -39,7 +39,7 @@ type Scope = {
   fixed: FixedPoint[]; // 처음은 끝이었다
 };
 
-type Slot = { readonly id: string; readonly name: string; readonly symbol: SymbolicTerm; readonly symbolId: SymbolId; readonly openedAt: number };
+type Slot = { readonly id: string; readonly name: string; readonly symbol: SymbolicTerm; readonly openedAt: number };
 type Line = { text: string | null; term: SymbolicTerm | null; heldSince: number | null };
 
 export type Effect =
@@ -88,7 +88,7 @@ export type SymbolSummary = {
   readonly state: "declared" | "constrained" | "resolved";
   readonly value: string | null;
   readonly resolvedAt: number | null;
-  readonly loop: string | null; // the cycle that closed on this symbol, if any
+  readonly loop: string | null; // the edge whose cycle closed on this symbol, if any
   readonly mark: "SELF_CAUSED" | "RETRO" | null;
 };
 
@@ -137,7 +137,6 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     return value ? { kind: "concrete", value } : binding;
   };
   const termOf = (binding: Binding): SymbolicTerm => (binding.kind === "concrete" ? literal(binding.value) : binding.term);
-  const caused = (binding: Binding): boolean => binding.kind === "concrete" || binding.caused;
   const pendingLabels = (term: SymbolicTerm) => store.pending(term).map((info) => info.label);
 
   // A name's binding as recorded, keeping its symbolic identity even when resolved.
@@ -161,10 +160,9 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
   const fromEnd = (name: string): Binding => {
     const current = scope();
     const symbol = store.declare(name, now, "끝");
-    const id = symbolsOf(symbol)[0] as SymbolId;
-    current.endReads.push({ name, symbol, id, madeAt: now, sentence });
+    current.endReads.push({ name, symbol, madeAt: now, sentence });
     effects.push({ kind: "endread", name, symbol: store.format(symbol), due: dueLabel(current) });
-    return { kind: "symbolic", term: symbol, caused: false };
+    return { kind: "symbolic", term: symbol };
   };
 
   const read = (operand: Operand): Binding => {
@@ -233,11 +231,16 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     recordResolutions(result.resolutions);
   };
 
-  // A symbol whose own cycle returns something built only from it closes on itself.
-  const noteLoop = (id: SymbolId, returned: Binding, loop: string): boolean => {
-    if (returned.kind !== "symbolic" || returned.caused || !symbolsOf(returned.term).includes(id)) return false;
-    store.info(id).selfLoop = loop;
-    return true;
+  // One rule for every cycle edge (channel, 끝의 N, fixed point): the edge equates an
+  // origin with what came back to it. When neither side carries an external cause and
+  // the returned value contains the origin's own symbols, the cycle closes on those
+  // symbols. Whether it also determines them is left to the solver.
+  const noteLoop = (origin: SymbolicTerm, returned: SymbolicTerm, via: string): boolean => {
+    if (carriesCause(origin) || carriesCause(returned)) return false;
+    const back = new Set(symbolsOf(returned));
+    const closed = symbolsOf(origin).filter((id) => back.has(id));
+    for (const id of closed) store.info(id).selfLoop ??= via;
+    return closed.length > 0;
   };
 
   // Everything that falls due when an iteration (or the run) ends.
@@ -252,7 +255,7 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
       if (stop) return;
       const binding = bindings.get(read.name);
       if (!binding) throw new RuntimeFault(`'끝의 ${read.name}' was read, but '${read.name}' has no value at the end`);
-      noteLoop(read.id, binding, `끝의 ${read.name}`);
+      noteLoop(read.symbol, termOf(binding), `끝의 ${read.name}`);
       constrain(read.symbol, termOf(binding), `끝의 ${read.name} from t${read.madeAt}`, read.sentence);
     }
     for (const fixed of ending.fixed.splice(0)) {
@@ -261,6 +264,7 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
         const before = ending.start.get(name);
         const after = bindings.get(name);
         if (!before || !after || before === after) continue; // introduced during the iteration, or untouched
+        noteLoop(termOf(before), termOf(after), `fixed point at t${fixed.madeAt}`);
         constrain(termOf(before), termOf(after), `처음은 끝이었다 at t${fixed.madeAt}`, fixed.sentence);
       }
     }
@@ -292,7 +296,7 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     }
     try {
       const term = store.arithmetic(termOf(left), termOf(right), sign);
-      assign(name, { kind: "symbolic", term, caused: caused(left) || caused(right) });
+      assign(name, { kind: "symbolic", term });
     } catch (error) {
       if (error instanceof TermError) throw new RuntimeFault(error.message);
       throw error;
@@ -306,7 +310,7 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
         return forward;
       case "declare": {
         const term = store.declare(operation.name, now);
-        bindings.set(operation.name, { kind: "symbolic", term, caused: false });
+        bindings.set(operation.name, { kind: "symbolic", term });
         markWritten(operation.name);
         effects.push({ kind: "declare", name: operation.name, symbol: store.format(term) });
         return forward;
@@ -334,11 +338,10 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
       case "receive": {
         // A channel opens: the name takes a value that something later will send back.
         const symbol = store.declare(operation.name, now, "다음");
-        const id = symbolsOf(symbol)[0] as SymbolId;
         slotCount += 1;
-        const slot: Slot = { id: `S${slotCount}`, name: operation.name, symbol, symbolId: id, openedAt: now };
+        const slot: Slot = { id: `S${slotCount}`, name: operation.name, symbol, openedAt: now };
         slots.set(operation.name, [...(slots.get(operation.name) ?? []), slot]);
-        bindings.set(operation.name, { kind: "symbolic", term: symbol, caused: false });
+        bindings.set(operation.name, { kind: "symbolic", term: symbol });
         markWritten(operation.name);
         effects.push({ kind: "open", slot: slot.id, name: operation.name, symbol: store.format(symbol) });
         return forward;
@@ -351,7 +354,7 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
           halt("PARADOX", `[${sentence}] cannot hold: no past is listening for '${operation.name}'`);
           return forward;
         }
-        const selfLoop = noteLoop(slot.symbolId, sent, slot.id);
+        const selfLoop = noteLoop(slot.symbol, termOf(sent), `channel ${slot.id}`);
         effects.push({ kind: "close", slot: slot.id, sent: store.format(termOf(sent)), openedAt: slot.openedAt, selfLoop });
         constrain(slot.symbol, termOf(sent), `channel ${slot.id}`, sentence);
         return forward;

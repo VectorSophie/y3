@@ -13,7 +13,7 @@ import { describeProgramOutcome } from "./program-outcome";
 //   constraint introduced        constraint α1 + 1 = 4  [past]
 //   symbol resolved              resolved α1 = 3
 //   retroactive resolution       retro α1 = 3  [born t1; fills t2, t3, t4]
-//   self-caused resolution       self-caused β1 = 0  [S1 closed on itself; no literal or input]
+//   self-caused resolution       self-caused β1 = 0  [via channel S1; closed on itself, no external cause]
 
 function at(c: { x: number; y: number; z: number }): string {
   return `(${c.x},${c.y},${c.z})`;
@@ -59,7 +59,7 @@ export function describeEffect(effect: Effect): string {
       return `promise ${effect.name} = ${effect.term}  [due ${effect.due}]`;
     case "resolve":
       if (effect.selfLoop) {
-        return `self-caused ${effect.symbol} = ${showValue(effect.value)}  [${effect.selfLoop} closed on itself; no literal or input]`;
+        return `self-caused ${effect.symbol} = ${showValue(effect.value)}  [via ${effect.selfLoop}; closed on itself, no external cause]`;
       }
       return effect.fills.length === 0
         ? `resolved ${effect.symbol} = ${showValue(effect.value)}`
@@ -84,9 +84,9 @@ export function formatProgramTraceEntry(entry: ProgramTraceEntry): string {
 export function describeSymbol(symbol: SymbolSummary): string {
   const head = `${symbol.label} (${symbol.noun}, born t${symbol.born})`;
   if (symbol.value === null) {
-    return symbol.loop ? `${head} closed on itself (${symbol.loop}), open` : `${head} ${symbol.state}, open`;
+    return symbol.loop ? `${head} closed on itself via ${symbol.loop}, open` : `${head} ${symbol.state}, open`;
   }
-  const mark = symbol.mark === "SELF_CAUSED" ? " [self-caused]" : symbol.mark === "RETRO" ? " [retro]" : "";
+  const mark = symbol.mark === "SELF_CAUSED" ? ` [self-caused via ${symbol.loop}]` : symbol.mark === "RETRO" ? " [retro]" : "";
   return `${head} = ${symbol.value} at t${symbol.resolvedAt}${mark}`;
 }
 

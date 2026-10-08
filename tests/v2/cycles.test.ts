@@ -42,13 +42,23 @@ describe("channels", () => {
   it("recognise a loop through other names, as long as no literal enters it", () => {
     const result = run("수가 다음에서 온다.", "다른은 수이다.", "다른에 수를 더한다.", "수는 다른이다.", "수를 말한다.", "수를 전으로 보낸다.", "끝이다.");
     expect(result.output).toEqual(["0"]); // β = 2β
-    expect(marks(result)).toEqual([["β1", "0", "SELF_CAUSED", "S1"]]);
+    expect(marks(result)).toEqual([["β1", "0", "SELF_CAUSED", "channel S1"]]);
   });
 
-  it("treat any literal on the way as a cause, even + 0", () => {
-    const result = run("수가 다음에서 온다.", "수에 0을 더한다.", "수를 말한다.", "수를 전으로 보낸다.", "끝이다.");
-    expect(result.outcome.status).toBe("AMBIGUOUS"); // β = β + 0 pins nothing …
-    expect(marks(result)).toEqual([["β1", null, null, null]]); // … and is not a closed self-loop
+  it("judge cause on the normal form: x + 0 and x - 0 are x, so β = β + 0 is β = β", () => {
+    for (const neutral of [["수에 0을 더한다."], ["수에서 0을 뺀다."], ["수에 3을 더한다.", "수에서 3을 뺀다."]]) {
+      const result = run("수가 다음에서 온다.", ...neutral, "수를 말한다.", "수를 전으로 보낸다.", "끝이다.");
+      expect(result.outcome.status).toBe("AMBIGUOUS"); // pins nothing …
+      expect(marks(result)).toEqual([["β1", null, null, "channel S1"]]); // … but closes on itself
+    }
+  });
+
+  it("count a value that came from a zero-valued name as neutral, and a non-zero one as a cause", () => {
+    const zero = run("영은 0이다.", "수가 다음에서 온다.", "수에 수를 더한다.", "수에 영을 더한다.", "수를 말한다.", "수를 전으로 보낸다.", "끝이다.");
+    expect(marks(zero)).toEqual([["β1", "0", "SELF_CAUSED", "channel S1"]]);
+    const one = run("수가 다음에서 온다.", "수에 수를 더한다.", "수에 1을 더한다.", "수를 말한다.", "수를 전으로 보낸다.", "끝이다.");
+    expect(one.output).toEqual(["-1"]); // β = 2β + 1: unique, but the literal 1 caused it
+    expect(marks(one)).toEqual([["β1", "-1", "RETRO", null]]);
   });
 
   it("never let an open self-loop decide a branch", () => {
@@ -66,7 +76,7 @@ describe("time anchors", () => {
     const zero = run("수는 끝의 수이다.", "수에 수를 더한다.", "수를 말한다.", "끝이다.");
     expect(zero.output).toEqual(["0"]);
     expect(marks(zero)).toEqual([["ε1", "0", "SELF_CAUSED", "끝의 수"]]);
-    expect(effects(zero)).toContain("self-caused ε1 = 0  [끝의 수 closed on itself; no literal or input]");
+    expect(effects(zero)).toContain("self-caused ε1 = 0  [via 끝의 수; closed on itself, no external cause]");
   });
 
   it("처음의 N is the start of the current iteration, renewed each time round", () => {
@@ -108,6 +118,30 @@ describe("fixed points (처음은 끝이었다)", () => {
   it("solve x = f(x) once, symbolically", () => {
     const result = run("수는 미정이다.", "여기가 처음이다.", "수에 수를 더한다.", "수에서 3을 뺀다.", "처음은 끝이었다.", "수를 말한다.", "끝이다.");
     expect(result.output).toEqual(["3"]);
+  });
+
+  it("are self-caused when they close on their own origin: α = 2α", () => {
+    const result = run("수는 미정이다.", "여기가 처음이다.", "수에 수를 더한다.", "처음은 끝이었다.", "수를 말한다.", "끝이다.");
+    expect(result.output).toEqual(["0"]);
+    expect(marks(result)).toEqual([["α1", "0", "SELF_CAUSED", "fixed point at t4"]]);
+    expect(effects(result)).toContain("self-caused α1 = 0  [via fixed point at t4; closed on itself, no external cause]");
+  });
+
+  it("stay open when they close on an identity, α = α (even through + 0)", () => {
+    const result = run("수는 미정이다.", "여기가 처음이다.", "수에 0을 더한다.", "처음은 끝이었다.", "수를 말한다.", "끝이다.");
+    expect(result.outcome.status).toBe("AMBIGUOUS");
+    expect(marks(result)).toEqual([["α1", null, null, "fixed point at t4"]]);
+  });
+
+  it("are caused, not self-caused, when a literal enters the loop: α = 2α - 3", () => {
+    const result = run("수는 미정이다.", "여기가 처음이다.", "수에 수를 더한다.", "수에서 3을 뺀다.", "처음은 끝이었다.", "수를 말한다.", "끝이다.");
+    expect(marks(result)).toEqual([["α1", "3", "RETRO", null]]);
+  });
+
+  it("are caused when the start itself carries a cause: α + 1 doubled", () => {
+    const result = run("수는 미정이다.", "수에 1을 더한다.", "여기가 처음이다.", "수에 수를 더한다.", "처음은 끝이었다.", "수를 말한다.", "끝이다.");
+    expect(result.output).toEqual(["0"]); // α + 1 = 2α + 2, so α = -1
+    expect(marks(result)).toEqual([["α1", "-1", "RETRO", null]]);
   });
 
   it("check an invariant when the start is known", () => {

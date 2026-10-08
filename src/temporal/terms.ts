@@ -64,6 +64,20 @@ export function combine(a: SymbolicTerm, b: SymbolicTerm, sign: 1n | -1n): Symbo
   return fromLinear({ constant: left.constant + sign * right.constant, coefficients });
 }
 
+// Whether a term carries an operational cause of its own, judged on its normal form:
+// a concrete value does, and so does a non-zero constant. Symbols alone do not, so a
+// neutral step (x + 0, x - 0, x + 3 - 3) leaves a value exactly as uncaused as before.
+export function carriesCause(term: SymbolicTerm): boolean {
+  switch (term.kind) {
+    case "literal":
+      return true;
+    case "symbol":
+      return false;
+    case "linear":
+      return term.constant !== 0n;
+  }
+}
+
 export function symbolsOf(term: SymbolicTerm): SymbolId[] {
   switch (term.kind) {
     case "literal":
