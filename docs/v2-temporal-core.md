@@ -57,26 +57,25 @@ newly determined symbols. A system with one equation in two unknowns resolves ne
 It never picks a value, never searches, and never chooses a branch. A condition on an
 open symbol is `UNRESOLVED`, even `α = α`.
 
-Integer solvability is checked per equation: the gcd of the coefficients must divide
-the constant. A whole system can still lack an integer solution while each equation
-passes this check. That limitation is documented, and the cases are rare.
+**Integer solvability is exact, for the whole system.** A per-equation test (the gcd of
+the coefficients divides the constant) is necessary but not sufficient. For example,
+3x + 3y + 2z = −4 and 3x + z = −4 each pass it, but together force z ≡ 1 and z ≡ 2
+(mod 3). After each new equation the solver brings the whole system to column Hermite
+form, using unimodular column operations in `bigint`, and solves it by forward
+substitution. An integer solution exists exactly when every step divides evenly.
 
-## Reading a trace
+Determination then needs no search. Once the system has integer solutions, a symbol
+that is unique over the rationals is unique over the integers, because any rational
+direction of freedom scales to an integer one. That separates the outcomes exactly:
 
-```
-4 (0,3,0) 남/위 [원래를 말한다.] → (0,4,0) 남/위
-  out α1  [held]                                    ← present execution, symbolic value
-6 (0,4,1) 남/위 [값은 4였다.] → (0,5,1) 남/위
-  constraint α1 + 1 = 4  [past]                     ← constraint introduced
-  retro α1 = 3  [born t1; fills t2, t3, t4]         ← retroactive resolution
-  out "3"  [held since t4]                          ← the held line is now determined
-```
+- **No integer solution:** `PARADOX` (reported as "no integer solution" for the
+  equation alone, or "… together with the earlier constraints").
+- **Integer solutions, and a symbol pinned down:** resolved.
+- **Integer solutions, but a symbol left open:** it stays open, and output that depends
+  on it is `AMBIGUOUS`.
 
-- **Plain resolution.** A resolution that nothing depended on yet reads
-  `resolved α1 = 7`.
-- **Promises.** A promise reads `promise 값 = 4  [due end of run]` where it is made,
-  and `constraint …  [promised at t2]` where it falls due.
-- **Symbol summary.** The end of a trace lists every symbol with its state.
+`temporal/integer-paradox.y3` and `temporal/integer-ambiguous.y3` show the two sides at
+the language level.
 
 ## Not yet (M4)
 
