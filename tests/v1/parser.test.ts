@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Y3ParseError, parseProgram } from "../src/core";
+import { Y3ParseError, parseProgram } from "../../src/v1/core";
 
 describe("parser", () => {
   it("parses layers and computes coordinates one-line-one-cell", () => {

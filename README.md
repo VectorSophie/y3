@@ -2,7 +2,46 @@
 
 Y3 is a strict 3D spatial execution language. Source is authored as **one non-empty line = one cell**. Execution is a pointer moving in 3D `(x,y,z)` with direction `(dx,dy,dz)`.
 
-## Why this format
+## v2 (in progress)
+
+v2 is being built milestone by milestone from `docs/v2-space-and-time.md`. **M0** (the
+document model) is done: a `.y3` file is one plain-text space made of Y2 planes.
+
+```
+⟦
+[값은 3이다.]
+[값이 2이면 위층으로 간다.]
+[끝이다.]
+⟧
+
+    ⟦ :detour: ⟧
+
+※
+
+:detour: ⟦
+[ ]
+["둘"을 말한다.]
+⟧
+```
+
+- `⟦ … ⟧` is a plane; plane order is `z`, rows are `y`, cells are `x`.
+- `[ … ]` is a cell, and `[ ]` is a blank one. Planes must be rectangular.
+- `⟦ :name: ⟧` places a named plane from the `※` section; it means exactly the same as
+  writing the plane inline.
+- Indentation and gaps are projection only; the parser never reads them.
+
+```bash
+y3 check program.y3                      # structure and references
+y3 fmt program.y3 [--projection flat|perspective|strong] [--write | --check]
+y3 unpack program.y3                     # → program/{META-INF,space,planes}
+y3 pack program/                         # → program.y3
+```
+
+M0 does not run v2 programs yet; sentences are carried as text until M2. `validate`,
+`run` and `trace` below are the v1 interpreter, which reads the v1 examples in
+`examples/v1/`. v2 examples are in `examples/v2/`.
+
+## Why this format (v1)
 
 The visible cell delimiter was removed to keep a literary appearance, but parser determinism is preserved by these hard rules:
 
@@ -37,16 +76,16 @@ npm test
 Run CLI examples:
 
 ```bash
-npm run validate -- examples/minimal.y3
-npm run run -- examples/minimal.y3
-npm run trace -- examples/minimal.y3
+npm run validate -- examples/v1/minimal.y3
+npm run run -- examples/v1/minimal.y3
+npm run trace -- examples/v1/minimal.y3
 ```
 
 Or link as a command:
 
 ```bash
 npm link
-y3 run examples/branch-true.y3
+y3 run examples/v1/branch-true.y3
 ```
 
 Publish-ready packaging check:
@@ -107,4 +146,4 @@ The IDE includes:
 - `docs/roadmap.md`
 - `docs/design-review-v2.md` (review of v1 + first v2 proposal)
 - `docs/v2-samchagak.md` (삼차각설계도: Yi Sang–based v2 concept)
-- `docs/v2-space-and-time.md` (v2 proposal: container, planes, orientation, tense-as-constraint)
+- `docs/v2-space-and-time.md` (accepted v2 design: container, planes, orientation, tense-as-constraint)

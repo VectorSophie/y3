@@ -1,0 +1,13 @@
+{
+  "$comment": "Expected run results for conformance fixtures. Each entry runs once its milestone lands; until then M0 only parses and round-trips it. status is one of HALT FAULT VOID STEP_LIMIT PARADOX UNRESOLVED AMBIGUOUS. output lists printed lines; '?' marks a line that has no unique value. unknowns are identified by the step that created them.",
+  "fixtures": [
+    { "path": "examples/v2/stairwell.y3", "milestone": "M2", "status": "HALT", "output": ["3", "2", "둘", "1", "발사"], "steps": 20 },
+    { "path": "examples/v2/stairwell-named.y3", "milestone": "M2", "status": "HALT", "output": ["3", "2", "둘", "1", "발사"], "steps": 20 },
+    { "path": "examples/v2/retro.y3", "milestone": "M3", "status": "HALT", "output": ["3"], "steps": 7, "unknowns": [{ "bornAtStep": 1, "value": "3", "mark": "RETRO" }] },
+    { "path": "examples/v2/prophecy.y3", "milestone": "M3", "status": "HALT", "output": ["3"], "steps": 6 },
+    { "path": "examples/v2/fixed-point.y3", "milestone": "M4", "status": "HALT", "output": ["3"], "steps": 7 },
+    { "path": "tests/conformance/temporal/bootstrap-ambiguous.y3", "milestone": "M4", "status": "AMBIGUOUS", "output": ["?"], "steps": 5 },
+    { "path": "tests/conformance/temporal/bootstrap-self-caused.y3", "milestone": "M4", "status": "HALT", "output": ["0"], "steps": 6, "unknowns": [{ "bornAtStep": 1, "value": "0", "mark": "SELF_CAUSED" }] },
+    { "path": "tests/conformance/temporal/bootstrap-paradox.y3", "milestone": "M4", "status": "PARADOX", "output": [], "steps": 4 }
+  ]
+}
