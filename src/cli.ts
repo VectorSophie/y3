@@ -9,7 +9,8 @@ import {
   parseProgram,
   runProgram,
   runProgramWithTrace,
-} from "./core";
+} from "./v1/core";
+import { registerV2Commands } from "./cli/v2-commands";
 
 function readSource(filePath: string): string {
   return readFileSync(filePath, "utf8");
@@ -67,10 +68,11 @@ function printError(error: unknown): never {
 
 const cli = new Command();
 
-cli.name("y3").description("YI3ANG v1 tooling").version("0.1.0");
+cli.name("y3").description("YI3ANG tooling: v2 document commands (check, fmt, unpack, pack) and the v1 interpreter (validate, run, trace)").version("0.1.0");
 
 cli
   .command("validate")
+  .description("v1: validate a v1 program")
   .argument("<file>", "Path to .y3 file")
   .action((filePath: string) => {
     try {
@@ -83,6 +85,7 @@ cli
 
 cli
   .command("run")
+  .description("v1: run a v1 program")
   .argument("<file>", "Path to .y3 file")
   .option("-i, --input <values>", "Space/comma separated integer input values")
   .option("--max-steps <count>", "Execution step limit (default: 10000)")
@@ -102,6 +105,7 @@ cli
 
 cli
   .command("trace")
+  .description("v1: trace a v1 program")
   .argument("<file>", "Path to .y3 file")
   .option("-i, --input <values>", "Space/comma separated integer input values")
   .option("--max-steps <count>", "Execution step limit (default: 10000)")
@@ -119,5 +123,7 @@ cli
       printError(error);
     }
   });
+
+registerV2Commands(cli);
 
 cli.parse();

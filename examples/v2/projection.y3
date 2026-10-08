@@ -1,0 +1,24 @@
+# Four 4×2 floors. Indentation and gaps are projection only.
+⟦
+[A] [B] [C] [D]
+[E] [F] [G] [H]
+⟧
+
+    ⟦
+    [I] [J] [K] [L]
+    [M] [N] [O] [P]
+    ⟧
+
+        ⟦
+        [Q] [R] [S] [T]
+        [U] [V] [W] [X]
+        ⟧
+
+            ⟦ :top: ⟧
+
+※
+
+:top: ⟦
+[값은 3이다.]  [오른쪽을 본다.] [ ] [ ]
+[아래를 본다.] [위층으로 간다.] [ ] [끝이다.]
+⟧

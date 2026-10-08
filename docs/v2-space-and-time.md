@@ -58,7 +58,7 @@ relation (the solver records it). No cell is ever both.
 | 4 | Minimal temporal model | Immutable value versions with affine terms over unknowns. Linear equalities. No machine snapshots. | 6 |
 | 5 | Unambiguous tense | A closed set of sentence-final forms. Orthographic variants are linted; meaning-bearing forms are parsed. Only the copula conjugates. | 5 |
 | 6 | How much retrocausality is core | Equational retrocausality is core. Choosing among histories is experimental. | 9 |
-| 7 | `끝은 처음이다` loops | Anchor-based cycles: `끝은 처음이다` continues, and a failed conditional `끝은 처음이다` closes the cycle. `처음은 끝이었다` is its relational twin. | 4, 7 |
+| 7 | `끝은 처음이다` loops | Anchor-based cycles: `끝은 처음이다` takes the back-edge to the anchor. When a conditional back-edge's condition fails, execution falls through and leaves the loop. `처음은 끝이었다` is its relational twin. | 4, 7 |
 | 8 | Separating execution and solving | Two engines behind five calls. Control flow on an unknown is `UNRESOLVED`. | 8 |
 | 9 | Anti-collapse rules | Seven rules. | 10 |
 | 10 | Tiers | Core / experimental / future. | 11 |
@@ -124,8 +124,7 @@ countdown/
   planes/basement.y2        # one file per named plane; exactly one ⟦ … ⟧ each
 ```
 
-`y3 pack countdown/` reverses it. `pack(unpack(doc))` is the canonical formatting of
-`doc`, so the space is unchanged. **To Y3 a `.y2` is a plane, not a file**: it has no
+`y3 pack countdown/` reverses it. `pack(unpack(doc))` is exactly `fmt(doc)`. **To Y3 a `.y2` is a plane, not a file**: it has no
 imports and no path semantics, and `:basement:` is a name inside the space, never a path.
 
 ### 1.3 Code organisation (TypeScript)
@@ -253,8 +252,11 @@ The formatter can only shrink what it adds: gaps and column-alignment padding,
 measured in display columns, where Hangul counts as two. It can **never** drop or
 abbreviate cells. *Visual perspective is not geometry.*
 
-In the appendix, definitions are ordered by first reference in the volume, and unused
-ones come last in name order. Definitions sit at indent 0.
+**The ※ section has one canonical order**, used by `fmt` and `pack` alike:
+named planes in order of first use in the volume, then never-used planes in lexical
+(code point) order. Definition order carries no meaning, so source order is not
+preserved: `fmt(s)`, `fmt(fmt(s))` and `pack(unpack(s))` are always the same text.
+Definitions sit at indent 0.
 
 ---
 
@@ -310,12 +312,16 @@ Loops are **anchors inside spatial execution**, and a plane can hold any number 
 |---|---|---|
 | `[여기가 처음이다.]` | present → act | opens a cycle anchored here (this cell, this orientation). Running an anchor that is already open starts its next iteration, after closing any cycles opened inside it. |
 | `[끝은 처음이다.]` | present → act | ends the current iteration of the innermost cycle and returns to its anchor, which runs next (**continue**) |
-| `[⟨조건⟩ 끝은 처음이다.]` | present → control | if the condition holds, continue; **if not, the innermost cycle closes** and execution moves on (a do-while exit) |
-| `[끝이다.]` | present → act | the end of the run: close every cycle (innermost first), then `HALT` |
+| `[⟨조건⟩ 끝은 처음이다.]` | present → control | if the condition holds, take the back-edge to the anchor; **if it fails, fall through to the next cell, leaving the loop** (a do-while exit) |
+| `[끝이다.]` | present → act | the end of the run: finish every open cycle (innermost first), then `HALT` |
 | `[처음은 끝이었다.]` | past → relation | when the current iteration ends, every noun written during it must equal its value at the iteration's start (**fixed point / invariant**) |
 
-Why a failed `끝은 처음이다` closes the cycle: *값이 0이 아니면 끝은 처음이다* reads
-"unless 값 is 0, the end is the beginning". When 값 is 0, the end is just the end.
+When the condition fails, execution falls through instead of taking the back-edge,
+and so exits the loop: *값이 0이 아니면 끝은 처음이다* reads "unless 값 is 0, the end
+is the beginning". When 값 is 0, the end is just the end, and the pointer walks on.
+Falling through also finishes that cycle's last iteration (its promises are checked)
+and removes its anchor from the cycle stack, so an enclosing loop's back-edge returns
+to the enclosing anchor.
 
 Cycles nest because they form a stack. Returning to an outer anchor discards any inner
 cycles that are still open, so spatial detours (§7, Example 1) are safe.
@@ -533,7 +539,7 @@ default (facing 남, up 위) unless stated.
 | 15 | (0,2,0) | `값을 말한다.` | out `1` |
 | 16 | (0,3,0) | `값이 2이면 위층으로 간다.` | 1 ≠ 2 |
 | 17 | (0,4,0) | `값에서 1을 뺀다.` | 값 := 0 |
-| 18 | (0,5,0) | `값이 0이 아니면 끝은 처음이다.` | 0 = 0 → **cycle A closes**; move on |
+| 18 | (0,5,0) | `값이 0이 아니면 끝은 처음이다.` | 0 = 0 → condition fails; **fall through, leaving loop A** |
 | 19 | (0,6,0) | `"발사"를 말한다.` | out `발사` |
 | 20 | (0,7,0) | `끝이다.` | `HALT` |
 
@@ -749,7 +755,7 @@ and β is marked 자기원인: past tense never writes.
 | 4 | (0,3,0) | `수에서 3을 뺀다.` | 수 := v2 = 2δ − 3 | |
 | 5 | (0,4,0) | `처음은 끝이었다.` | | at A's iteration end: 수 = v0 |
 | 6 | (0,5,0) | `수를 말한다.` | output #1 = 2δ − 3, held | |
-| 7 | (0,6,0) | `끝이다.` | close A → `HALT` | 2δ − 3 = δ ⇒ **δ = 3**; flush `3` |
+| 7 | (0,6,0) | `끝이다.` | finish A → `HALT` | 2δ − 3 = δ ⇒ **δ = 3**; flush `3` |
 
 The body runs **once**, symbolically, and solves x = 2x − 3. Had 수 been known on entry
 (say 5), the same sentence would check an **invariant** instead: 7 ≠ 5, so `역설`.

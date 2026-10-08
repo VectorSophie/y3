@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createInitialState, parseProgram, runProgram, type Program } from "../src/core";
+import { createInitialState, parseProgram, runProgram, type Program } from "../../src/v1/core";
 
 describe("runtime", () => {
   it("supports push/add/sub/pop and output stack", () => {

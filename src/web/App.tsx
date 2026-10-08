@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as monaco from "monaco-editor";
 import * as THREE from "three";
-import { parseProgram, runProgramWithTrace, type Program, type StepTrace } from "../core";
+import { parseProgram, runProgramWithTrace, type Program, type StepTrace } from "../v1/core";
 
 const DEFAULT_SOURCE = `@layer 0
 값은 1이다
