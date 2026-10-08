@@ -7,7 +7,7 @@ import { readRepoFile } from "./helpers";
 // must match exactly. Fixtures for later milestones must still load, and must be
 // refused by the compiler only because they use what a later milestone adds.
 
-const IMPLEMENTED = new Set(["M2"]);
+const IMPLEMENTED = new Set(["M2", "M3"]);
 
 type Expectation = {
   path: string;
@@ -16,6 +16,7 @@ type Expectation = {
   output: string[];
   steps: number;
   trace?: string;
+  unknowns?: { bornAtStep: number; value: string; mark: string | null }[];
 };
 
 const { fixtures } = JSON.parse(readRepoFile("tests/conformance/expected.json")) as { fixtures: Expectation[] };
@@ -60,6 +61,12 @@ describe("conformance fixtures", () => {
         expect(result.outcome.steps).toBe(fixture.steps);
         if (fixture.trace) {
           expect(formatProgramTrace(result)).toBe(readRepoFile(fixture.trace));
+        }
+        for (const unknown of fixture.unknowns ?? []) {
+          const symbol = result.symbols.find((s) => s.born === unknown.bornAtStep);
+          expect(symbol, `symbol born at step ${unknown.bornAtStep}`).toBeDefined();
+          expect(symbol?.value).toBe(unknown.value);
+          expect(symbol?.mark).toBe(unknown.mark);
         }
       });
     });

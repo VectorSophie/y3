@@ -34,8 +34,8 @@ export function compileProgram(ast: DocumentAst, space: Space): { program: Compi
   const diagnostics: Diagnostic[] = [];
   const reported = new Set<string>();
   const operations = new Map<string, Operation>();
-  const reads = new Map<string, { span: Span }>();
-  const written = new Set<string>();
+  const uses = new Map<string, { span: Span }>();
+  const introduced = new Set<string>();
   let unparsed = 0;
 
   for (const layer of space.layers) {
@@ -57,20 +57,20 @@ export function compileProgram(ast: DocumentAst, space: Space): { program: Compi
         const operation = lower(result.sentence);
         operations.set(coordinateKey({ x, y, z: layer.z }), operation);
         const names = namesIn(operation);
-        for (const name of names.writes) written.add(name);
-        for (const name of names.reads) if (!reads.has(name)) reads.set(name, { span });
+        for (const name of names.introduces) introduced.add(name);
+        for (const name of names.uses) if (!uses.has(name)) uses.set(name, { span });
       });
     });
   }
 
   // A cell that did not parse might have given the name a value, so only judge names
   // when every cell parsed; otherwise the report would be noise.
-  for (const [name, { span }] of unparsed > 0 ? [] : reads) {
-    if (!written.has(name)) {
+  for (const [name, { span }] of unparsed > 0 ? [] : uses) {
+    if (!introduced.has(name)) {
       diagnostics.push({
-        code: SENTENCE_CODES.NEVER_ASSIGNED,
+        code: SENTENCE_CODES.NEVER_INTRODUCED,
         severity: "error",
-        message: `'${name}' is read, but no sentence ever gives it a value`,
+        message: `'${name}' is used but never introduced: give it a value ('${name}은 3이다') or declare it ('${name}은 미정이다')`,
         span,
       });
     }

@@ -1,6 +1,6 @@
 // Y3 v2. Layers: language (source → AST), space (semantic model), format, container.
 // semantics/ lowers sentences into operations (M2); runtime/ is the spatial machine
-// (M1) and the present-tense interpreter (M2). The temporal layer arrives in M3–M4.
+// (M1) and the interpreter (M2–M3); temporal/ holds symbols, constraints and the solver (M3).
 
 export * from "./language/ast";
 export * from "./language/diagnostics";
@@ -29,3 +29,7 @@ export { lower } from "./semantics/lower";
 export * from "./semantics/program";
 export * from "./runtime/interpreter";
 export * from "./runtime/program-trace";
+export * from "./runtime/program-outcome";
+export * from "./temporal/terms";
+export * from "./temporal/solver";
+export * from "./temporal/store";

@@ -1,0 +1,11 @@
+1 (0,0,0) 남/위 [값은 미정이다.] → (0,1,0) 남/위
+  값 := α1  [미정]
+2 (0,1,0) 남/위 [원래는 값이다.] → (0,2,0) 남/위
+  원래 := α1
+3 (0,2,0) 남/위 [값에 1을 더한다.] → (0,3,0) 남/위
+  값 := α1 + 1
+4 (0,3,0) 남/위 [원래가 3이면 끝이다.] → (0,4,0) 남/위
+  unresolved: needs α1
+진단: 미결 (UNRESOLVED) · 4보 · (0,3,0): this condition needs α1, which only the future could decide
+symbols:
+  α1 (값, born t1) declared, open

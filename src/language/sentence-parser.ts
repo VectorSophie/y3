@@ -1,10 +1,11 @@
 import type { Compass, Relative, Turn } from "../space/orientation";
 import { canonicalParticle, endingOf, type ParticlePair } from "./korean";
-import type { ActAst, ConditionAst, Expr, SentenceAst } from "./sentence-ast";
+import type { ActAst, ConditionAst, Expr, RelationAst, SentenceAst } from "./sentence-ast";
 
-// Parses one cell's sentence (M2: present tense only). Tense is read from the
-// sentence-final form; past and future forms are recognised and reported as not yet
-// supported rather than half-run. Particles assign roles, so word order is free.
+// Parses one cell's sentence. Tense is read from the sentence-final form: present
+// tense is an act (it executes), past and future tense are relations (they constrain).
+// Forms that belong to later milestones are recognised and refused, never half-run.
+// Particles assign roles, so word order is free.
 
 export type SentenceIssue = { code: string; severity: "error" | "warning"; message: string };
 export type SentenceResult = { sentence: SentenceAst | null; issues: SentenceIssue[] };
@@ -16,7 +17,7 @@ export const SENTENCE_CODES = {
   WRONG_ROLES: "Y3G004",
   UNKNOWN_DIRECTION: "Y3G005",
   RESERVED_NOUN: "Y3G006",
-  NEVER_ASSIGNED: "Y3G007",
+  NEVER_INTRODUCED: "Y3G007",
   VERB_TENSE: "Y3G008",
   BAD_CONDITIONAL: "Y3G009",
   TEMPORAL_LATER: "Y3T001",
@@ -83,9 +84,10 @@ const LATER_VERBS: Readonly<Record<string, string>> = {
   곱한다: "multiplication",
   나눈다: "division",
   듣는다: "input",
-  온다: "temporal channels (M4)",
-  보낸다: "temporal channels (M4)",
+  온다: "temporal channels, M4",
+  보낸다: "temporal channels, M4",
 };
+const TIME_WORDS = new Set(["처음", "끝", "여기", "전", "다음"]);
 const PAST_VERB_ENDINGS = ["했다", "뺐다", "갔다", "봤다", "보았다", "들었다", "왔다", "냈다"];
 
 const NOUN_PATTERN = /^[\p{L}_][\p{L}\p{N}_]*$/u;
@@ -207,27 +209,58 @@ function expectRoles(verb: string, found: Map<Role, Phrase>, expected: Role[], u
   }
 }
 
-function checkTense(words: string[]): void {
+// The subject of a relation: an ordinary noun. 처음/끝 as subjects are fixed points and
+// time anchors, which belong to M4.
+function relationSubject(word: string, issues: SentenceIssue[]): string {
+  const subject = phrase(word, issues);
+  if (subject.role !== "subject") {
+    fail(SENTENCE_CODES.WRONG_ROLES, "a relation is written 'N은 E이었다' or 'N은 E일 것이다'");
+  }
+  if (TIME_WORDS.has(subject.stem)) {
+    fail(SENTENCE_CODES.TEMPORAL_LATER, `relations about '${subject.stem}' (fixed points and time anchors) arrive in M4`);
+  }
+  return noun(subject.stem);
+}
+
+// Past and future copulas. Returns null for any other sentence.
+function parseRelation(words: string[], issues: SentenceIssue[]): RelationAst | null {
   const last = words[words.length - 1] ?? "";
   const before = words[words.length - 2] ?? "";
   if (last === "것이다") {
-    if (before.endsWith("일")) {
-      fail(SENTENCE_CODES.TEMPORAL_LATER, "future tense (일 것이다) constrains rather than executes; it arrives in M3");
+    if (!before.endsWith("일") || before.length < 2) {
+      fail(SENTENCE_CODES.VERB_TENSE, "verbs are present tense only (더한다, not 더할 것이다); only states take tense");
     }
-    fail(SENTENCE_CODES.VERB_TENSE, "verbs are present tense only (더한다, not 더할 것이다); only states take tense");
+    if (words.length !== 3) {
+      fail(SENTENCE_CODES.WRONG_ROLES, "a promise is written 'N은 E일 것이다'");
+    }
+    return { kind: "promise", noun: relationSubject(words[0] ?? "", issues), value: expr(before.slice(0, -1)) };
   }
-  if (last.endsWith("이었다") || last.endsWith("였다")) {
-    fail(SENTENCE_CODES.TEMPORAL_LATER, "past tense (이었다/였다) constrains rather than executes; it arrives in M3");
+  const past = last.endsWith("이었다") ? "이었다" : last.endsWith("였다") ? "였다" : null;
+  if (past && last.length > past.length) {
+    if (words.length !== 2) {
+      fail(SENTENCE_CODES.WRONG_ROLES, "a past statement is written 'N은 E이었다'");
+    }
+    const value = last.slice(0, -past.length);
+    const ending = endingOf(value);
+    const canonical = ending === "vowel" ? "였다" : "이었다";
+    if (ending && canonical !== past) {
+      issues.push({
+        code: SENTENCE_CODES.NON_CANONICAL,
+        severity: "warning",
+        message: `non-canonical Korean: write '${value}${canonical}' instead of '${value}${past}'`,
+      });
+    }
+    return { kind: "assert", noun: relationSubject(words[0] ?? "", issues), value: expr(value) };
   }
-  if (PAST_VERB_ENDINGS.some((ending) => last.endsWith(ending))) {
-    fail(SENTENCE_CODES.VERB_TENSE, "verbs are present tense only (더한다, not 더했다); only states take tense");
-  }
+  return null;
 }
 
 function parseAct(words: string[], issues: SentenceIssue[]): ActAst {
-  checkTense(words);
   const last = words[words.length - 1] ?? "";
   const rest = words.slice(0, -1);
+  if (PAST_VERB_ENDINGS.some((ending) => last.endsWith(ending))) {
+    fail(SENTENCE_CODES.VERB_TENSE, "verbs are present tense only (더한다, not 더했다); only states take tense");
+  }
 
   if (words.length === 1 && last === "끝이다") {
     return { kind: "end" };
@@ -247,9 +280,7 @@ function parseAct(words: string[], issues: SentenceIssue[]): ActAst {
     }
     if (subject.stem === "여기" && value === "처음") return { kind: "anchor" };
     if (subject.stem === "끝" && value === "처음") return { kind: "back" };
-    if (value === "미정") {
-      fail(SENTENCE_CODES.FEATURE_LATER, "undetermined values (미정) belong to the temporal model; they arrive in M3");
-    }
+    if (value === "미정") return { kind: "declare", noun: noun(subject.stem) };
     return { kind: "assign", noun: noun(subject.stem), value: expr(value) };
   }
 
@@ -333,10 +364,13 @@ export function parseSentence(text: string): SentenceResult {
     if (words.length === 0) {
       fail(SENTENCE_CODES.UNKNOWN_SENTENCE, "empty sentence");
     }
+    if (words.some((word) => word === "처음의" || word === "끝의")) {
+      fail(SENTENCE_CODES.TEMPORAL_LATER, "time anchors (처음의, 끝의) arrive in M4");
+    }
 
     const conditionEnd = words.findIndex(isConditionEnd);
     if (conditionEnd < 0) {
-      return { sentence: parseAct(words, issues), issues };
+      return { sentence: parseRelation(words, issues) ?? parseAct(words, issues), issues };
     }
     const end = words[conditionEnd] ?? "";
     if (end.endsWith("것이라면")) {
@@ -352,6 +386,9 @@ export function parseSentence(text: string): SentenceResult {
     }
     if (consequence.some(isConditionEnd)) {
       fail(SENTENCE_CODES.BAD_CONDITIONAL, "a consequence cannot itself be conditional");
+    }
+    if (parseRelation(consequence, [])) {
+      fail(SENTENCE_CODES.BAD_CONDITIONAL, "a consequence must be present tense; a relation cannot depend on a condition");
     }
     const then = parseAct(consequence, issues);
     if (then.kind === "anchor") {

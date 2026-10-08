@@ -1,0 +1,23 @@
+# The same shape, but 3x + 3y + 2z = -4 and 3x + z = -5 agree mod 3: integer solutions
+# exist, three unknowns and two equations leave them open, so the output is ambiguous.
+⟦
+[가는 미정이다.]
+[나는 미정이다.]
+[다는 미정이다.]
+[첫째는 가이다.]
+[첫째에 가를 더한다.]
+[첫째에 가를 더한다.]
+[첫째에 나를 더한다.]
+[첫째에 나를 더한다.]
+[첫째에 나를 더한다.]
+[첫째에 다를 더한다.]
+[첫째에 다를 더한다.]
+[둘째는 가이다.]
+[둘째에 가를 더한다.]
+[둘째에 가를 더한다.]
+[둘째에 다를 더한다.]
+[첫째는 -4였다.]
+[둘째는 -5였다.]
+[가를 말한다.]
+[끝이다.]
+⟧
