@@ -1,0 +1,14 @@
+1 (0,0,0) 남/위 [문장이 다음에서 온다.] → (0,1,0) 남/위
+  channel S1 opens: 문장 := β1  [다음에서 온다]
+2 (0,1,0) 남/위 [문장을 말한다.] → (0,2,0) 남/위
+  out β1  [held]
+3 (0,2,0) 남/위 [위층으로 간다.] → (0,2,1) 남/위
+4 (0,2,1) 남/위 [문장을 전으로 보낸다.] → (0,3,1) 남/위
+  channel S1 closes: β1 back to t1  [closes on itself]
+  constraint β1 = β1  [channel S1]
+5 (0,3,1) 남/위 [끝이다.] → (0,3,1) 남/위
+  end
+  ambiguous: β1 has no unique value
+진단: 중의 (AMBIGUOUS) · 5보 · (0,3,1): the output depends on β1, which the constraints leave open
+symbols:
+  β1 (문장, born t1) closed on itself via channel S1, open

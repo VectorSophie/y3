@@ -1,0 +1,19 @@
+1 (0,0,0) 남/위 [수는 미정이다.] → (0,1,0) 남/위
+  수 := α1  [미정]
+2 (0,1,0) 남/위 [여기가 처음이다.] → (0,2,0) 남/위
+  처음 (0,1,0) #1
+3 (0,2,0) 남/위 [수에 수를 더한다.] → (0,3,0) 남/위
+  수 := 2·α1
+4 (0,3,0) 남/위 [처음은 끝이었다.] → (0,4,0) 남/위
+  처음은 끝이었다  [due end of 처음 (0,1,0) #1]
+5 (0,4,0) 남/위 [수를 말한다.] → (0,5,0) 남/위
+  out 2·α1  [held]
+6 (0,5,0) 남/위 [끝이다.] → (0,5,0) 남/위
+  constraint α1 = 2·α1  [처음은 끝이었다 at t4]
+  self-caused α1 = 0  [via fixed point at t4; closed on itself, no external cause]
+  out "0"  [held since t5]
+  leave 처음 (0,1,0)
+  end
+진단: 정지 (HALT) · 6보 · ended at (0,5,0)
+symbols:
+  α1 (수, born t1) = 0 at t6 [self-caused via fixed point at t4]

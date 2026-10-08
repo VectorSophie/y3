@@ -15,9 +15,17 @@
     {"path": "tests/conformance/temporal/retro-unresolved.y3", "milestone": "M3", "status": "UNRESOLVED", "output": [], "steps": 4, "trace": "tests/conformance/traces/retro-unresolved.trace"},
     {"path": "tests/conformance/temporal/integer-paradox.y3", "milestone": "M3", "status": "PARADOX", "output": [], "steps": 17, "trace": "tests/conformance/traces/integer-paradox.trace"},
     {"path": "tests/conformance/temporal/integer-ambiguous.y3", "milestone": "M3", "status": "AMBIGUOUS", "output": ["?"], "steps": 19, "trace": "tests/conformance/traces/integer-ambiguous.trace"},
-    {"path": "examples/v2/fixed-point.y3", "milestone": "M4", "status": "HALT", "output": ["3"], "steps": 7},
-    {"path": "tests/conformance/temporal/bootstrap-ambiguous.y3", "milestone": "M4", "status": "AMBIGUOUS", "output": ["?"], "steps": 5},
-    {"path": "tests/conformance/temporal/bootstrap-self-caused.y3", "milestone": "M4", "status": "HALT", "output": ["0"], "steps": 6, "unknowns": [{"bornAtStep": 1, "value": "0", "mark": "SELF_CAUSED"}]},
-    {"path": "tests/conformance/temporal/bootstrap-paradox.y3", "milestone": "M4", "status": "PARADOX", "output": [], "steps": 4}
+    {"path": "examples/v2/fixed-point.y3", "milestone": "M4", "status": "HALT", "output": ["3"], "steps": 7, "trace": "tests/conformance/traces/fixed-point.trace", "unknowns": [{"bornAtStep": 1, "value": "3", "mark": "RETRO"}]},
+    {"path": "tests/conformance/temporal/bootstrap-ambiguous.y3", "milestone": "M4", "status": "AMBIGUOUS", "output": ["?"], "steps": 5, "trace": "tests/conformance/traces/bootstrap-ambiguous.trace", "unknowns": [{"bornAtStep": 1, "value": null, "mark": null}]},
+    {"path": "tests/conformance/temporal/bootstrap-self-caused.y3", "milestone": "M4", "status": "HALT", "output": ["0"], "steps": 6, "unknowns": [{"bornAtStep": 1, "value": "0", "mark": "SELF_CAUSED"}], "trace": "tests/conformance/traces/bootstrap-self-caused.trace"},
+    {"path": "tests/conformance/temporal/bootstrap-paradox.y3", "milestone": "M4", "status": "PARADOX", "output": [], "steps": 4, "trace": "tests/conformance/traces/bootstrap-paradox.trace"},
+    {"path": "tests/conformance/cycles/bootstrap-testimony.y3", "milestone": "M4", "status": "HALT", "output": ["날자"], "steps": 6, "trace": "tests/conformance/traces/bootstrap-testimony.trace", "unknowns": [{"bornAtStep": 1, "value": "날자", "mark": "SELF_CAUSED"}]},
+    {"path": "tests/conformance/cycles/channel-unanswered.y3", "milestone": "M4", "status": "AMBIGUOUS", "output": ["?"], "steps": 3, "trace": "tests/conformance/traces/channel-unanswered.trace"},
+    {"path": "tests/conformance/cycles/channel-no-past.y3", "milestone": "M4", "status": "PARADOX", "output": [], "steps": 2, "trace": "tests/conformance/traces/channel-no-past.trace"},
+    {"path": "tests/conformance/cycles/fixed-point-broken.y3", "milestone": "M4", "status": "PARADOX", "output": [], "steps": 6, "trace": "tests/conformance/traces/fixed-point-broken.trace"},
+    {"path": "tests/conformance/cycles/fixed-point-self-caused.y3", "milestone": "M4", "status": "HALT", "output": ["0"], "steps": 6, "trace": "tests/conformance/traces/fixed-point-self-caused.trace", "unknowns": [{"bornAtStep": 1, "value": "0", "mark": "SELF_CAUSED"}]},
+    {"path": "tests/conformance/cycles/neutral-step.y3", "milestone": "M4", "status": "HALT", "output": ["0"], "steps": 7, "trace": "tests/conformance/traces/neutral-step.trace", "unknowns": [{"bornAtStep": 1, "value": "0", "mark": "SELF_CAUSED"}]},
+    {"path": "tests/conformance/cycles/anchor-start.y3", "milestone": "M4", "status": "HALT", "output": ["5", "6"], "steps": 8, "trace": "tests/conformance/traces/anchor-start.trace"},
+    {"path": "tests/conformance/cycles/anchor-end.y3", "milestone": "M4", "status": "HALT", "output": ["5"], "steps": 5, "trace": "tests/conformance/traces/anchor-end.trace", "unknowns": [{"bornAtStep": 1, "value": "5", "mark": "RETRO"}]}
   ]
 }

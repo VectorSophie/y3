@@ -1,0 +1,17 @@
+1 (0,0,0) 남/위 [수가 다음에서 온다.] → (0,1,0) 남/위
+  channel S1 opens: 수 := β1  [다음에서 온다]
+2 (0,1,0) 남/위 [수에 수를 더한다.] → (0,2,0) 남/위
+  수 := 2·β1
+3 (0,2,0) 남/위 [수를 말한다.] → (0,3,0) 남/위
+  out 2·β1  [held]
+4 (0,3,0) 남/위 [위층으로 간다.] → (0,3,1) 남/위
+5 (0,3,1) 남/위 [수를 전으로 보낸다.] → (0,4,1) 남/위
+  channel S1 closes: 2·β1 back to t1  [closes on itself]
+  constraint β1 = 2·β1  [channel S1]
+  self-caused β1 = 0  [via channel S1; closed on itself, no external cause]
+  out "0"  [held since t3]
+6 (0,4,1) 남/위 [끝이다.] → (0,4,1) 남/위
+  end
+진단: 정지 (HALT) · 6보 · ended at (0,4,1)
+symbols:
+  β1 (수, born t1) = 0 at t5 [self-caused via channel S1]

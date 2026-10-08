@@ -76,8 +76,25 @@ y3 trace countdown.y3    # every executed cell and its effects
 
 This prints `3`: α + 1 = 4 at step 5 determines the α printed at step 4. When the
 constraints have no solution the run ends in `PARADOX`; when they leave the output open,
-`AMBIGUOUS`; and a condition that needs an open value is `UNRESOLVED`. Fixed points and
-temporal channels come in M4.
+`AMBIGUOUS`; and a condition that needs an open value is `UNRESOLVED`.
+
+**M4** lets time loop (`docs/v2-temporal-cycles.md`): channels carry a value from later
+to earlier, `처음은 끝이었다` makes an iteration a fixed point, and `처음의`/`끝의` read a
+name at the start or end of an iteration. A value can cause itself:
+
+```
+⟦
+[수가 다음에서 온다.]
+[수에 수를 더한다.]
+[수를 말한다.]
+[수를 전으로 보낸다.]
+[끝이다.]
+⟧
+```
+
+This prints `0`: the only number that survives being doubled on its way back to its own
+past (β = 2β). With nothing to pin it the same loop is `AMBIGUOUS` (β = β), and with
+`+ 1` on the way it is a `PARADOX` (β = β + 1).
 `run` and `trace` choose v1 or v2 from the file: v2 documents contain planes. The
 sections below describe v1, whose examples are in `examples/v1/`; v2 examples are in
 `examples/v2/`.
@@ -189,4 +206,5 @@ The IDE includes:
 - `docs/v2-samchagak.md` (삼차각설계도: Yi Sang–based v2 concept)
 - `docs/v2-space-and-time.md` (accepted v2 design: container, planes, orientation, tense-as-constraint)
 - `docs/v2-present-tense.md` (the M2 sentence set)
-- `docs/v2-temporal-core.md` (M3: 미정, 였다, 일 것이다)
+- `docs/v2-temporal-core.md` (M3: 미정, 였다, 일 것이다; the solver model)
+- `docs/v2-temporal-cycles.md` (M4: channels, fixed points, time anchors, self-caused values)

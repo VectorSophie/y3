@@ -7,7 +7,7 @@ import { readRepoFile } from "./helpers";
 // must match exactly. Fixtures for later milestones must still load, and must be
 // refused by the compiler only because they use what a later milestone adds.
 
-const IMPLEMENTED = new Set(["M2", "M3"]);
+const IMPLEMENTED = new Set(["M2", "M3", "M4"]);
 
 type Expectation = {
   path: string;
@@ -16,16 +16,20 @@ type Expectation = {
   output: string[];
   steps: number;
   trace?: string;
-  unknowns?: { bornAtStep: number; value: string; mark: string | null }[];
+  unknowns?: { bornAtStep: number; value: string | null; mark: string | null }[];
 };
 
 const { fixtures } = JSON.parse(readRepoFile("tests/conformance/expected.json")) as { fixtures: Expectation[] };
 
 describe("conformance fixtures", () => {
-  it("includes the bootstrap trio, still waiting for M4", () => {
+  it("includes the canonical bootstrap trio: β = β, β = 2β, β = β + 1", () => {
     const trio = fixtures.filter((fixture) => fixture.path.includes("/temporal/bootstrap-"));
-    expect(trio.map((fixture) => fixture.status).sort()).toEqual(["AMBIGUOUS", "HALT", "PARADOX"]);
-    expect(trio.every((fixture) => fixture.milestone === "M4")).toBe(true);
+    expect(trio.map((fixture) => [fixture.path.split("/").pop(), fixture.status, fixture.output])).toEqual([
+      ["bootstrap-ambiguous.y3", "AMBIGUOUS", ["?"]],
+      ["bootstrap-self-caused.y3", "HALT", ["0"]],
+      ["bootstrap-paradox.y3", "PARADOX", []],
+    ]);
+    expect(trio.every((fixture) => IMPLEMENTED.has(fixture.milestone))).toBe(true);
   });
 
   for (const fixture of fixtures) {

@@ -1,0 +1,5 @@
+1 (0,0,0) 남/위 [수는 1이다.] → (0,1,0) 남/위
+  수 := 1
+2 (0,1,0) 남/위 [수를 전으로 보낸다.] → (0,2,0) 남/위
+  contradiction: nothing earlier is waiting for '수'
+진단: 역설 (PARADOX) · 2보 · (0,1,0): [수를 전으로 보낸다.] cannot hold: no past is listening for '수'

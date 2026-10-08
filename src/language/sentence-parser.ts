@@ -1,6 +1,6 @@
 import type { Compass, Relative, Turn } from "../space/orientation";
 import { canonicalParticle, endingOf, type ParticlePair } from "./korean";
-import type { ActAst, ConditionAst, Expr, RelationAst, SentenceAst } from "./sentence-ast";
+import type { ActAst, ConditionAst, Expr, RelationAst, SentenceAst, TimeAnchor } from "./sentence-ast";
 
 // Parses one cell's sentence. Tense is read from the sentence-final form: present
 // tense is an act (it executes), past and future tense are relations (they constrain).
@@ -20,6 +20,8 @@ export const SENTENCE_CODES = {
   NEVER_INTRODUCED: "Y3G007",
   VERB_TENSE: "Y3G008",
   BAD_CONDITIONAL: "Y3G009",
+  ANCHOR_WRITE: "Y3G010",
+  ANCHOR_TENSE: "Y3G011",
   TEMPORAL_LATER: "Y3T001",
   FEATURE_LATER: "Y3T002",
   NON_CANONICAL: "Y3K001",
@@ -79,13 +81,11 @@ export const RESERVED_WORDS = new Set([
   ...Object.keys(FLOOR_WORDS),
 ]);
 
-const PRESENT_VERBS = new Set(["더한다", "뺀다", "말한다", "본다", "간다"]);
+const PRESENT_VERBS = new Set(["더한다", "뺀다", "말한다", "본다", "간다", "온다", "보낸다"]);
 const LATER_VERBS: Readonly<Record<string, string>> = {
   곱한다: "multiplication",
   나눈다: "division",
   듣는다: "input",
-  온다: "temporal channels, M4",
-  보낸다: "temporal channels, M4",
 };
 const TIME_WORDS = new Set(["처음", "끝", "여기", "전", "다음"]);
 const PAST_VERB_ENDINGS = ["했다", "뺐다", "갔다", "봤다", "보았다", "들었다", "왔다", "냈다"];
@@ -173,7 +173,12 @@ function unquote(literal: string): string {
   return literal.slice(1, -1).replace(/\\(.)/g, "$1");
 }
 
+const ANCHORED = /^(처음|끝)의 (.+)$/u;
+
 function noun(stem: string): string {
+  if (ANCHORED.test(stem)) {
+    fail(SENTENCE_CODES.ANCHOR_WRITE, `'${stem}' names a value at a moment in time; it can be read or constrained, never written`);
+  }
   if (RESERVED_WORDS.has(stem)) {
     fail(SENTENCE_CODES.RESERVED_NOUN, `'${stem}' is a reserved word and cannot name a value`);
   }
@@ -184,6 +189,8 @@ function noun(stem: string): string {
 }
 
 function expr(stem: string): Expr {
+  const anchored = stem.match(ANCHORED);
+  if (anchored) return { kind: "anchored", anchor: anchored[1] as TimeAnchor, name: noun(anchored[2] ?? "") };
   if (/^-?\d+$/.test(stem)) return { kind: "int", value: BigInt(stem) };
   if (stem.startsWith('"') && stem.endsWith('"') && stem.length >= 2) return { kind: "text", value: unquote(stem) };
   return { kind: "noun", name: noun(stem) };
@@ -209,17 +216,26 @@ function expectRoles(verb: string, found: Map<Role, Phrase>, expected: Role[], u
   }
 }
 
-// The subject of a relation: an ordinary noun. 처음/끝 as subjects are fixed points and
-// time anchors, which belong to M4.
-function relationSubject(word: string, issues: SentenceIssue[]): string {
+// The subject of a relation: a noun, possibly anchored in time. Its tense must agree
+// with its anchor: 처음의 N is past, 끝의 N is future.
+function relationSubject(word: string, tense: "past" | "future", issues: SentenceIssue[]): { noun: string; anchor: TimeAnchor | null } {
   const subject = phrase(word, issues);
   if (subject.role !== "subject") {
     fail(SENTENCE_CODES.WRONG_ROLES, "a relation is written 'N은 E이었다' or 'N은 E일 것이다'");
   }
   if (TIME_WORDS.has(subject.stem)) {
-    fail(SENTENCE_CODES.TEMPORAL_LATER, `relations about '${subject.stem}' (fixed points and time anchors) arrive in M4`);
+    fail(SENTENCE_CODES.UNKNOWN_SENTENCE, `'${subject.stem}' is not a value; the only relation between 처음 and 끝 is '처음은 끝이었다'`);
   }
-  return noun(subject.stem);
+  const anchored = subject.stem.match(ANCHORED);
+  if (!anchored) return { noun: noun(subject.stem), anchor: null };
+  const anchor = anchored[1] as TimeAnchor;
+  if ((anchor === "처음" && tense === "future") || (anchor === "끝" && tense === "past")) {
+    fail(
+      SENTENCE_CODES.ANCHOR_TENSE,
+      anchor === "처음" ? "처음 is in the past: write '처음의 N은 E이었다'" : "끝 is in the future: write '끝의 N은 E일 것이다'",
+    );
+  }
+  return { noun: noun(anchored[2] ?? ""), anchor };
 }
 
 // Past and future copulas. Returns null for any other sentence.
@@ -233,7 +249,7 @@ function parseRelation(words: string[], issues: SentenceIssue[]): RelationAst | 
     if (words.length !== 3) {
       fail(SENTENCE_CODES.WRONG_ROLES, "a promise is written 'N은 E일 것이다'");
     }
-    return { kind: "promise", noun: relationSubject(words[0] ?? "", issues), value: expr(before.slice(0, -1)) };
+    return { kind: "promise", ...relationSubject(words[0] ?? "", "future", issues), value: expr(before.slice(0, -1)) };
   }
   const past = last.endsWith("이었다") ? "이었다" : last.endsWith("였다") ? "였다" : null;
   if (past && last.length > past.length) {
@@ -241,6 +257,10 @@ function parseRelation(words: string[], issues: SentenceIssue[]): RelationAst | 
       fail(SENTENCE_CODES.WRONG_ROLES, "a past statement is written 'N은 E이었다'");
     }
     const value = last.slice(0, -past.length);
+    const first = phrase(words[0] ?? "", []);
+    if (first.stem === "처음" && first.role === "subject" && value === "끝") {
+      return { kind: "fixed" };
+    }
     const ending = endingOf(value);
     const canonical = ending === "vowel" ? "였다" : "이었다";
     if (ending && canonical !== past) {
@@ -250,7 +270,7 @@ function parseRelation(words: string[], issues: SentenceIssue[]): RelationAst | 
         message: `non-canonical Korean: write '${value}${canonical}' instead of '${value}${past}'`,
       });
     }
-    return { kind: "assert", noun: relationSubject(words[0] ?? "", issues), value: expr(value) };
+    return { kind: "assert", ...relationSubject(words[0] ?? "", "past", issues), value: expr(value) };
   }
   return null;
 }
@@ -301,6 +321,20 @@ function parseAct(words: string[], issues: SentenceIssue[]): ActAst {
     case "뺀다": {
       expectRoles(last, found, ["source", "object"], "N에서 E을 뺀다");
       return { kind: "subtract", noun: noun(found.get("source")?.stem ?? ""), amount: expr(found.get("object")?.stem ?? "") };
+    }
+    case "온다": {
+      expectRoles(last, found, ["subject", "source"], "N이 다음에서 온다");
+      if (found.get("source")?.stem !== "다음") {
+        fail(SENTENCE_CODES.WRONG_ROLES, "a value comes from the future: 'N이 다음에서 온다'");
+      }
+      return { kind: "receive", noun: noun(found.get("subject")?.stem ?? "") };
+    }
+    case "보낸다": {
+      expectRoles(last, found, ["object", "direction"], "N을 전으로 보낸다");
+      if (found.get("direction")?.stem !== "전") {
+        fail(SENTENCE_CODES.WRONG_ROLES, "a value is sent to the past: 'N을 전으로 보낸다'");
+      }
+      return { kind: "send", noun: noun(found.get("object")?.stem ?? "") };
     }
     case "말한다": {
       expectRoles(last, found, ["object"], "E을 말한다");
@@ -360,12 +394,18 @@ export function parseSentence(text: string): SentenceResult {
     if (!trimmed.endsWith(".")) {
       fail(SENTENCE_CODES.NO_FULL_STOP, "a sentence ends with '.'");
     }
-    const words = eojeols(trimmed.slice(0, -1));
+    // "처음의 N…" and "끝의 N…" are one noun phrase anchored in time.
+    const words: string[] = [];
+    for (const word of eojeols(trimmed.slice(0, -1))) {
+      const previous = words[words.length - 1];
+      if (previous === "처음의" || previous === "끝의") {
+        words[words.length - 1] = `${previous} ${word}`;
+      } else {
+        words.push(word);
+      }
+    }
     if (words.length === 0) {
       fail(SENTENCE_CODES.UNKNOWN_SENTENCE, "empty sentence");
-    }
-    if (words.some((word) => word === "처음의" || word === "끝의")) {
-      fail(SENTENCE_CODES.TEMPORAL_LATER, "time anchors (처음의, 끝의) arrive in M4");
     }
 
     const conditionEnd = words.findIndex(isConditionEnd);
