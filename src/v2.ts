@@ -1,6 +1,7 @@
 // Y3 v2. Layers: language (source → AST), space (semantic model), format, container.
-// semantics/ lowers sentences into operations (M2); runtime/ is the spatial machine
-// (M1) and the interpreter (M2–M3); temporal/ holds symbols, constraints and the solver (M3).
+// semantics/ elaborates sentences into the typed IR in ir/ (M5), which types/ checks;
+// runtime/ is the spatial machine (M1) and the interpreter (M2–M5); temporal/ holds
+// symbols, constraints and the solver (M3–M4).
 
 export * from "./language/ast";
 export * from "./language/diagnostics";
@@ -24,10 +25,16 @@ export { decodeAssembly } from "./runtime/assembly";
 export * from "./language/korean";
 export * from "./language/sentence-ast";
 export { parseSentence, SENTENCE_CODES, RESERVED_WORDS, type SentenceIssue, type SentenceResult } from "./language/sentence-parser";
-export * from "./semantics/operations";
-export { lower } from "./semantics/lower";
+export * from "./semantics/values";
+export { elaborate, NounTable, PENDING, ELABORATION_CODES } from "./semantics/elaborate";
 export * from "./semantics/program";
+export * from "./ir/hir";
+export * from "./ir/callables";
+export * from "./ir/print";
+export * from "./types/types";
+export * from "./types/check";
 export * from "./runtime/interpreter";
+export * from "./runtime/evaluate";
 export * from "./runtime/program-trace";
 export * from "./runtime/program-outcome";
 export * from "./temporal/terms";

@@ -105,9 +105,12 @@ describe("text unknowns", () => {
     expect(result.output).toEqual(["이상"]);
   });
 
-  it("cannot be both a number and text", () => {
-    const result = run("값은 미정이다.", "값에 1을 더한다.", '값은 "하나"였다.', "끝이다.");
-    expect(result.outcome.status).toBe("PARADOX");
+  it("cannot be both a number and text: the type checker refuses it before the run (M5)", () => {
+    const { compiled } = compile('⟦\n[값은 미정이다.]\n[값에 1을 더한다.]\n[값은 "하나"였다.]\n[끝이다.]\n⟧');
+    expect(compiled.program).toBeNull();
+    expect(compiled.diagnostics.map((d) => [d.code, d.message])).toEqual([
+      ["Y3Y001", '[값은 "하나"였다.] \'값\' holds Int since [값에 1을 더한다.] (line 3), not Text'],
+    ]);
   });
 });
 
@@ -167,14 +170,14 @@ describe("layering", () => {
     for (const file of readdirSync(dir)) {
       const imports = [...readFileSync(join(dir, file), "utf8").matchAll(/from "([^"]+)"/g)].map((m) => m[1] ?? "");
       for (const path of imports) {
-        expect(path === "../semantics/operations" || path.startsWith("./"), `${file} imports ${path}`).toBe(true);
+        expect(path === "../semantics/values" || path.startsWith("./"), `${file} imports ${path}`).toBe(true);
       }
     }
   });
 
-  it("keeps ConcreteValue concrete: int or text only", () => {
-    const source = readFileSync(join(__dirname, "..", "..", "src", "semantics", "operations.ts"), "utf8");
-    const declaration = source.match(/^export type ConcreteValue = .*$/m)?.[0] ?? "";
-    expect([...declaration.matchAll(/kind: "(\w+)"/g)].map((m) => m[1])).toEqual(["int", "text"]);
+  it("keeps ConcreteValue concrete: plain data, never a symbol or a term", () => {
+    const source = readFileSync(join(__dirname, "..", "..", "src", "semantics", "values.ts"), "utf8");
+    const declaration = source.match(/^export type ConcreteValue =[\s\S]*?;$/m)?.[0] ?? "";
+    expect([...declaration.matchAll(/kind: "(\w+)"/g)].map((m) => m[1])).toEqual(["int", "text", "bool", "unit", "data"]);
   });
 });

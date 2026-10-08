@@ -5,6 +5,7 @@ import { loadDocument } from "../container/document";
 import { compileProgram } from "../semantics/program";
 import { runProgram } from "../runtime/interpreter";
 import { formatProgramTrace } from "../runtime/program-trace";
+import { formatProgramIr } from "../ir/print";
 import { describeProgramOutcome, PROGRAM_EXIT_CODES } from "../runtime/program-outcome";
 import { packDocument, unpackDocument, type FileMap } from "../container/pack";
 import { formatDocument } from "../format/formatter";
@@ -80,13 +81,22 @@ function readTree(root: string): FileMap {
 export function registerV2Commands(cli: Command): void {
   cli
     .command("check")
-    .description("check a v2 document: structure, manifest, and every sentence")
+    .description("check a v2 document: structure, manifest, every sentence, and types")
     .argument("<file>", "path to a .y3 document")
     .action((filePath: string) => {
       const { program } = compileOrExit(filePath);
       const layers = program.space.layers;
       const sizes = layers.map((layer) => `${layer.plane.width}×${layer.plane.height}`).join(", ");
       console.log(`ok: ${layers.length} layer(s) [${sizes}]`);
+    });
+
+  cli
+    .command("ir")
+    .description("print a v2 program's typed IR: one statement per cell, with its types and source position")
+    .argument("<file>", "path to a .y3 document")
+    .action((filePath: string) => {
+      const { program } = compileOrExit(filePath);
+      process.stdout.write(formatProgramIr(program.cells.values(), program.nouns));
     });
 
   cli

@@ -1,4 +1,4 @@
-import type { ConcreteValue } from "../semantics/operations";
+import { sameValue, type ConcreteValue } from "../semantics/values";
 import { LinearSystem } from "./solver";
 import { combine, formatTerm, substitute, symbol, symbolsOf, toLinear, TermError, type SymbolicTerm, type SymbolId } from "./terms";
 
@@ -123,8 +123,7 @@ export class TemporalStore {
     const right = this.current(b);
 
     if (left.kind === "literal" && right.kind === "literal") {
-      const same = left.value.kind === right.value.kind && left.value.value === right.value.value;
-      return same
+      return sameValue(left.value, right.value)
         ? { kind: "consistent", resolutions: [] }
         : { kind: "contradiction", reason: `${this.format(left)} ≠ ${this.format(right)}` };
     }

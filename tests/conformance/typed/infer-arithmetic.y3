@@ -1,0 +1,10 @@
+# Type unknowns and value unknowns are different things. 미정 gives 값 a type variable
+# and a value symbol α. Arithmetic settles the type (Int) before the run; testimony
+# settles the value (α = 3) during it.
+⟦
+[값은 미정이다.]
+[값에 1을 더한다.]
+[값을 말한다.]
+[값은 4였다.]
+[끝이다.]
+⟧

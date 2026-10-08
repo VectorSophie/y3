@@ -1,0 +1,8 @@
+# Bool is a real type: 참 and 거짓, compared with Eq<Bool>. Nothing is truthy.
+⟦
+[참임은 참이다.]
+[참임이 거짓이면 "아니다"를 말한다.]
+[참임이 참이면 "그렇다"를 말한다.]
+[참임을 말한다.]
+[끝이다.]
+⟧

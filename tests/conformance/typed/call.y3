@@ -1,0 +1,10 @@
+# Colon calls: [이름공간 이름: 인자, …]. The colon is syntax, not prose, so the full
+# stop is optional. 말한다 and 표준 줄출력 are the same call.
+⟦
+[값은 -7이다.]
+[크기는 수학 절댓값: 값]
+[표준 줄출력: 크기]
+[큰것은 수학 최댓값: 크기, 10]
+[큰것을 말한다.]
+[끝이다.]
+⟧

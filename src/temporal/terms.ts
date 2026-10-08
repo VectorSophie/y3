@@ -1,4 +1,4 @@
-import type { ConcreteValue } from "../semantics/operations";
+import { showValue, type ConcreteValue } from "../semantics/values";
 
 // Symbolic terms: what a value is known to be in terms of symbols that only the
 // future can determine. Kept apart from ConcreteValue on purpose: present-tense
@@ -113,7 +113,7 @@ export function substitute(term: SymbolicTerm, valueOf: (id: SymbolId) => Concre
 
 export function formatTerm(term: SymbolicTerm, label: (id: SymbolId) => string): string {
   if (term.kind === "literal") {
-    return term.value.kind === "int" ? term.value.value.toString() : JSON.stringify(term.value.value);
+    return showValue(term.value);
   }
   if (term.kind === "symbol") return label(term.id);
   const parts: string[] = [];

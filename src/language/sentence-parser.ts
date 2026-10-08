@@ -1,11 +1,12 @@
 import type { Compass, Relative, Turn } from "../space/orientation";
 import { canonicalParticle, endingOf, type ParticlePair } from "./korean";
-import type { ActAst, ConditionAst, Expr, RelationAst, SentenceAst, TimeAnchor } from "./sentence-ast";
+import type { ActAst, CallAst, ConditionAst, ExprAst, RelationAst, SentenceAst, TimeAnchor } from "./sentence-ast";
 
 // Parses one cell's sentence. Tense is read from the sentence-final form: present
 // tense is an act (it executes), past and future tense are relations (they constrain).
 // Forms that belong to later milestones are recognised and refused, never half-run.
-// Particles assign roles, so word order is free.
+// Particles assign roles, so word order is free. A colon marks an explicit call,
+// `[이름공간 이름: 인자, …]`, which is syntax rather than prose.
 
 export type SentenceIssue = { code: string; severity: "error" | "warning"; message: string };
 export type SentenceResult = { sentence: SentenceAst | null; issues: SentenceIssue[] };
@@ -20,6 +21,7 @@ export const SENTENCE_CODES = {
   NEVER_INTRODUCED: "Y3G007",
   VERB_TENSE: "Y3G008",
   BAD_CONDITIONAL: "Y3G009",
+  BAD_CALL: "Y3G012",
   ANCHOR_WRITE: "Y3G010",
   ANCHOR_TENSE: "Y3G011",
   TEMPORAL_LATER: "Y3T001",
@@ -69,6 +71,8 @@ const STEP_WORDS: Readonly<Record<string, Relative>> = {
 const FLOOR_WORDS: Readonly<Record<string, 1 | -1>> = { 위층: 1, 아래층: -1 };
 
 export const RESERVED_WORDS = new Set([
+  "참",
+  "거짓",
   "처음",
   "끝",
   "여기",
@@ -188,10 +192,11 @@ function noun(stem: string): string {
   return stem;
 }
 
-function expr(stem: string): Expr {
+function expr(stem: string): ExprAst {
   const anchored = stem.match(ANCHORED);
   if (anchored) return { kind: "anchored", anchor: anchored[1] as TimeAnchor, name: noun(anchored[2] ?? "") };
   if (/^-?\d+$/.test(stem)) return { kind: "int", value: BigInt(stem) };
+  if (stem === "참" || stem === "거짓") return { kind: "bool", value: stem === "참" };
   if (stem.startsWith('"') && stem.endsWith('"') && stem.length >= 2) return { kind: "text", value: unquote(stem) };
   return { kind: "noun", name: noun(stem) };
 }
@@ -275,7 +280,63 @@ function parseRelation(words: string[], issues: SentenceIssue[]): RelationAst | 
   return null;
 }
 
+// The index of the first ':' outside a quoted text, or -1.
+function colonAt(text: string): number {
+  let inQuote = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inQuote && ch === "\\") i += 1;
+    else if (ch === '"') inQuote = !inQuote;
+    else if (!inQuote && ch === ":") return i;
+  }
+  return -1;
+}
+
+// Splits call arguments on ',' outside quoted texts.
+function callArguments(text: string): string[] {
+  const args: string[] = [];
+  let current = "";
+  let inQuote = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i] ?? "";
+    if (inQuote && ch === "\\") {
+      current += ch + (text[i + 1] ?? "");
+      i += 1;
+      continue;
+    }
+    if (ch === '"') inQuote = !inQuote;
+    if (ch === "," && !inQuote) {
+      args.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  args.push(current.trim());
+  return args;
+}
+
+// [이름공간 이름: 인자, …] or [N은 이름공간 이름: 인자, …].
+function parseCall(words: string[], issues: SentenceIssue[]): ActAst {
+  const usage = "a call is written '[이름공간 이름: 인자, …]' or '[N은 이름공간 이름: 인자, …]'";
+  const text = words.join(" ");
+  const colon = colonAt(text);
+  const head = text.slice(0, colon).trim().split(" ").filter((w) => w.length > 0);
+  const tail = text.slice(colon + 1).trim();
+  const args = tail.length === 0 ? [] : callArguments(tail);
+  if (args.some((arg) => arg.length === 0)) fail(SENTENCE_CODES.BAD_CALL, `an argument is missing: ${usage}`);
+  const target = head.length === 3 ? head[0] ?? "" : null;
+  const [namespace, name] = head.slice(-2);
+  if ((head.length !== 2 && head.length !== 3) || !namespace || !name) fail(SENTENCE_CODES.BAD_CALL, usage);
+  const call: CallAst = { kind: "call", namespace, name, args: args.map(expr) };
+  if (target === null) return { kind: "call", call };
+  const subject = phrase(target, issues);
+  if (subject.role !== "subject") fail(SENTENCE_CODES.BAD_CALL, usage);
+  return { kind: "assign", noun: noun(subject.stem), value: call };
+}
+
 function parseAct(words: string[], issues: SentenceIssue[]): ActAst {
+  if (colonAt(words.join(" ")) >= 0) return parseCall(words, issues);
   const last = words[words.length - 1] ?? "";
   const rest = words.slice(0, -1);
   if (PAST_VERB_ENDINGS.some((ending) => last.endsWith(ending))) {
@@ -391,12 +452,15 @@ export function parseSentence(text: string): SentenceResult {
   const issues: SentenceIssue[] = [];
   try {
     const trimmed = text.trim();
-    if (!trimmed.endsWith(".")) {
+    // A call is syntax, not prose: its full stop is optional.
+    const isCall = colonAt(trimmed) >= 0;
+    if (!trimmed.endsWith(".") && !isCall) {
       fail(SENTENCE_CODES.NO_FULL_STOP, "a sentence ends with '.'");
     }
+    const body = trimmed.endsWith(".") ? trimmed.slice(0, -1) : trimmed;
     // "처음의 N…" and "끝의 N…" are one noun phrase anchored in time.
     const words: string[] = [];
-    for (const word of eojeols(trimmed.slice(0, -1))) {
+    for (const word of eojeols(body)) {
       const previous = words[words.length - 1];
       if (previous === "처음의" || previous === "끝의") {
         words[words.length - 1] = `${previous} ${word}`;
@@ -408,9 +472,11 @@ export function parseSentence(text: string): SentenceResult {
       fail(SENTENCE_CODES.UNKNOWN_SENTENCE, "empty sentence");
     }
 
-    const conditionEnd = words.findIndex(isConditionEnd);
+    // A condition can only come before a call's colon, never among its arguments.
+    const callWord = words.findIndex((word) => colonAt(word) >= 0);
+    const conditionEnd = words.findIndex((word, i) => (callWord < 0 || i < callWord) && isConditionEnd(word));
     if (conditionEnd < 0) {
-      return { sentence: parseRelation(words, issues) ?? parseAct(words, issues), issues };
+      return { sentence: (isCall ? null : parseRelation(words, issues)) ?? parseAct(words, issues), issues };
     }
     const end = words[conditionEnd] ?? "";
     if (end.endsWith("것이라면")) {
@@ -427,7 +493,7 @@ export function parseSentence(text: string): SentenceResult {
     if (consequence.some(isConditionEnd)) {
       fail(SENTENCE_CODES.BAD_CONDITIONAL, "a consequence cannot itself be conditional");
     }
-    if (parseRelation(consequence, [])) {
+    if (colonAt(consequence.join(" ")) < 0 && parseRelation(consequence, [])) {
       fail(SENTENCE_CODES.BAD_CONDITIONAL, "a consequence must be present tense; a relation cannot depend on a condition");
     }
     const then = parseAct(consequence, issues);

@@ -1,0 +1,6 @@
+# 값 is Int from its first statement; it cannot also hold Text.
+⟦
+[값은 3이다.]
+[값은 "셋"이다.]
+[끝이다.]
+⟧
