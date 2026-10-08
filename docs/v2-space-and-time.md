@@ -2,11 +2,27 @@
 
 > In space, Y3 moves. In time, Y3 states.
 
-Status: design proposal, precise enough to implement. It supersedes the language
-model in `v2-samchagak.md`. §12 lists what carries over from that doc.
+Status: **accepted design**. It is the basis for the v2 implementation, which starts with
+milestone M0 (§13). It supersedes the language model in `v2-samchagak.md`; §12 lists
+what carries over.
 
 Every program in this document has been traced by hand against the rules stated
-here. Each one is meant to become a golden test once the implementation starts.
+here. Each will become a conformance test as soon as the milestone that can run it
+lands. Until then they are kept as parse and round-trip fixtures.
+
+---
+
+## Locked decisions
+
+| # | Decision |
+|---|---|
+| D1 | **`.y3` is one plain-text document.** It holds the volume, inline planes, and a `※` section of named planes. `y3 unpack` materialises a folder only when explicitly asked. There is no zip container. |
+| D2 | **The authored space has hard edges.** A blank cell `[ ]` exists; a position with no cell is **VOID**. Stepping past a plane's edge is `VOID`. Rows never wrap. Wrapped or toroidal topology may come later as an explicit feature. |
+| D3 | **No past machine snapshots.** The runtime keeps only the symbolic value versions and dependency information that temporal constraints need (§6.1). |
+| D4 | **Orthography is lint, not syntax.** Interchangeable allomorphs (은/는, 이/가, 을/를, 으로/로, 이었다/였다) are all accepted, reported as non-canonical, and rewritten by the formatter. Particles and endings that change meaning stay semantic (§5.5). |
+| D5 | **Loops are anchor-based cycles inside spatial execution**, not whole planes. `여기가 처음이다` opens a cycle, `끝은 처음이다` continues it, and a plane can hold several cycles (§4). |
+| D6 | **One implementation language: TypeScript.** One parser, one semantic model. Integers are `bigint`. The solver is a small hand-written linear-equality solver: no Z3, no SMT, no Go. Rust is an option later only for an isolated solver (native + WebAssembly). |
+| D7 | **Pipeline discipline:** source → AST → semantic model → runtime. The parser never constructs runtime behaviour. |
 
 ---
 
@@ -19,68 +35,58 @@ here. Each one is meant to become a golden test once the implementation starts.
 | **Y3** space | an ordered stack of planes (a building) | — | — |
 | **space** | layout, orientation, movement | **operational** | the machine |
 | **time** | tense (`이다` / `였다` / `일 것이다`) | **relational** | the solver |
-| **relation** | particles (`은 이 을 에 에서 으로 의 보다`) | assigns roles | the grammar |
+| **relation** | particles (`에 에서 을 으로 의 보다`) | assigns roles | the grammar |
 
-The core rule that keeps all of this from collapsing:
+The core rule:
 
 > **현재형은 실행하고, 과거형과 미래형은 제약한다.**
 > Present tense executes. Past and future tense constrain.
+>
+> **이다 replaces, 였다 reveals, 일 것이다 promises.**
 
-The **tense morpheme is the type tag** of a sentence. The parser decides from the
-sentence-final form alone whether a cell is an action (the machine runs it) or a
+The **tense morpheme is the type tag** of a sentence. From the sentence-final form
+alone, the parser decides whether a cell is an action (the machine runs it) or a
 relation (the solver records it). No cell is ever both.
 
 ### Answers at a glance
 
 | # | Question | Short answer | § |
 |---|---|---|---|
-| 1 | Container in the architecture | One logical container (manifest + named planes + volume order). It is stored as a single text `.y3` by default; `unpack` / `pack` convert it to and from a directory. Parsing becomes `decode → resolve refs → plane layout → Korean → frames`. | 1 |
-| 2 | Y2 / Y3 grammar | An EBNF over `⟦ ⟧`, `[ ]`, `:name:`, and a `※` appendix. Indentation and gaps are never read. Planes must be rectangular. | 2 |
-| 3 | Orientation | The 24 cube orientations as (forward, up) pairs. `본다` turns, `간다` steps once, `층` translates in z. Rows wrap like lines of text. | 3 |
-| 4 | Minimal temporal model | Named values are terms over unknowns. Linear equalities are solved by unification plus Gaussian elimination. Per-plane snapshots, promises, and channel slots. No history log. | 6 |
-| 5 | Unambiguous tense | A closed set of sentence-final forms, matched by suffix. Copula allomorphs and particles must agree with 받침. Only the copula conjugates; verbs are present-only. | 5 |
-| 6 | How much retrocausality is core | **Equational** retrocausality is core, because it is deterministic and needs no search. **Choosing among histories** is experimental. | 9 |
-| 7 | `끝은 처음이다` loops | Yes. A loop is a plane cycle: `끝은 처음이다` continues and `끝이다` breaks. Nested loops are stacked floors. `처음은 끝이었다` is the relational twin: a fixed point or invariant. | 4, 7 |
-| 8 | Separating execution and solving | Two engines behind a five-call interface. The machine never asks the solver to *choose*. Control flow on an unknown value is `UNRESOLVED`. | 8 |
-| 9 | Anti-collapse rules | Seven rules (§10): no stack, no coordinates in sentences, equalities only, no search in core, verbs don't conjugate, and so on. | 10 |
-| 10 | Tiers | Core / experimental / future table. | 11 |
+| 1 | Container in the architecture | A single text document parsed into an AST, then resolved into a semantic `Space`. Inline and named planes become identical layers. `unpack`/`pack` convert to and from a folder. | 1 |
+| 2 | Y2 / Y3 grammar | An EBNF over `⟦ ⟧`, `[ ]`, `:name:`, and `※`. Indentation and gaps are never read. Planes are rectangular. | 2 |
+| 3 | Orientation | 24 cube orientations (forward, up). `본다` turns, `간다` steps once, `층` translates in z. Edges are VOID. Default facing is 남, down the page. | 3 |
+| 4 | Minimal temporal model | Immutable value versions with affine terms over unknowns. Linear equalities. No machine snapshots. | 6 |
+| 5 | Unambiguous tense | A closed set of sentence-final forms. Orthographic variants are linted; meaning-bearing forms are parsed. Only the copula conjugates. | 5 |
+| 6 | How much retrocausality is core | Equational retrocausality is core. Choosing among histories is experimental. | 9 |
+| 7 | `끝은 처음이다` loops | Anchor-based cycles: `끝은 처음이다` continues, and a failed conditional `끝은 처음이다` closes the cycle. `처음은 끝이었다` is its relational twin. | 4, 7 |
+| 8 | Separating execution and solving | Two engines behind five calls. Control flow on an unknown is `UNRESOLVED`. | 8 |
+| 9 | Anti-collapse rules | Seven rules. | 10 |
+| 10 | Tiers | Core / experimental / future. | 11 |
 
 ---
 
-## 1. The `.y3` container
+## 1. The `.y3` document
 
 ### 1.1 Logical model
 
-A Y3 program is a **space**, not a file:
+A Y3 program is a **space**:
 
 ```
 Space
   manifest    language version, name, start pose, limits, experimental flags
-  planes      name → Plane            (every plane is a named object)
-  volume      [PlaneRef]              (order = z: 0, 1, 2, …)
+  layers      [Layer]           index = z
+  Layer       { plane: Plane, presentation: inline | named(name) }
+  Plane       { width, height, cells[y][x] }
 ```
 
-An inline plane is a plane with a generated name (`:#1:`, `:#2:`, …). That makes
-**inline ≡ referenced** true by construction: the volume only ever holds
-references. Inlining and extracting are display decisions that the formatter can
-toggle without changing the space.
+- **Inline ≡ referenced.** A layer's `presentation` records whether the source wrote
+  the plane inline or as `⟦ :name: ⟧`. Presentation is excluded from the semantic
+  model: two documents that differ only in inline-versus-named are the same space.
+  Extracting a plane into the `※` section, or inlining it back, never changes the space.
+- **Reuse.** A named plane can be referenced from several layers, like one floor plan
+  built on two storeys. Each reference is its own layer, with its own z and its own cells.
 
-The same named plane can appear more than once in the volume, like the same floor
-plan used on two storeys. Each occurrence is a separate floor with its own z, its
-own cells and its own `처음`.
-
-### 1.2 Physical encodings
-
-**Recommendation: a single UTF-8 text `.y3` as the canonical encoding**, plus a
-directory form for `unpack`. A zip container can be added later as an optional
-distribution format.
-
-Why text over zip by default: `.y3` is still something people author, diff, review
-and paste. A zip is opaque to git, to editors, and to anyone without the CLI. The
-container idea survives intact either way, because the *logical* model above is
-what Y3 sees. The text file is just one way of writing that model down.
-
-Text encoding (one file, normally the only thing a user sees):
+### 1.2 One text file
 
 ```
 +++
@@ -89,95 +95,63 @@ name = "countdown"
 
 ⟦
 [값은 3이다.]
+[여기가 처음이다.]
+[값을 말한다.]
+[값이 0이 아니면 끝은 처음이다.]
+[끝이다.]
 ⟧
 
-    ⟦ :loop: ⟧
-
-        ⟦
-        ["발사"를 말한다.]
-        ⟧
+    ⟦ :basement: ⟧
 
 ※
-:loop: ⟦
-[값을 말한다.]
-[값에서 1을 뺀다.]
-[값이 0이면 끝이다.]
-[끝은 처음이다.]
+
+:basement: ⟦
+[ ]
+[ ]
 ⟧
 ```
 
-- The `+++` front matter is exactly `manifest.toml`.
+- The `+++` front matter is the manifest (TOML).
 - After `※` comes the **appendix**: named planes that the volume refers to.
   (The mark is from 「오감도 시제6호」: 鸚鵡 ※ 二匹.)
 
-`y3 unpack countdown.y3` produces the directory form:
+`y3 unpack countdown.y3` writes:
 
 ```
 countdown/
-  META-INF/manifest.toml
-  space/main.y3s        # the volume: one ⟦ :name: ⟧ per line, projection kept
-  planes/
-    p0.y2               # inline planes get names; manifest records inline = true
-    loop.y2
-    p2.y2
+  META-INF/manifest.toml    # the front matter, if any
+  space/main.y3s            # the volume; inline planes stay inline here
+  planes/basement.y2        # one file per named plane; exactly one ⟦ … ⟧ each
 ```
 
-`y3 pack countdown/` reverses it, and `pack ∘ unpack` is the identity on the
-logical model. A `.y2` file contains exactly one `⟦ … ⟧`. **To Y3 it is a plane,
-not a file**: it has no imports, no path semantics, and `:loop:` is a name inside
-the space, never a path.
+`y3 pack countdown/` reverses it. `pack(unpack(doc))` is the canonical formatting of
+`doc`, so the space is unchanged. **To Y3 a `.y2` is a plane, not a file**: it has no
+imports and no path semantics, and `:basement:` is a name inside the space, never a path.
 
-`manifest.toml`:
-
-```toml
-[y3]
-language = "2.0"
-name = "countdown"
-
-[start]            # default pose; all optional
-plane = 0          # z
-cell = [0, 0]      # [x, y]
-facing = "동"
-up = "위"
-
-[limits]
-steps = 10000
-
-[experimental]     # §9; all off by default
-future-branching = false
-
-[planes.p0]        # written by unpack only
-inline = true
-```
-
-### 1.3 Where it fits the existing code
-
-v1's `parser.ts` and `runtime.ts` are replaced. The CLI scaffolding, tests and IDE
-shell carry over.
+### 1.3 Code organisation (TypeScript)
 
 ```
 src/
-  container/  decode(text | dir) → SpaceDoc; encode; pack/unpack; manifest schema
-  syntax/     plane lexer (⟦ ⟧ [ ] :ref: ※) → PlaneAST; formatter + projections
-  korean/     jamo/받침, Sino-Korean number readings, eojeol → noun+particle | predicate
-  grammar/    frame table (single source of truth) → Sentence IR: Act | Relation | Control
-  check/      static checks (§5.5)
-  space/      Program (planes by z, dims), the 24-orientation group, movement
-  machine/    operational executor (deterministic)
-  time/       terms, unknowns, solver, promises, channels, provenance
-  outcome/    statuses, 진단 report, trace
-  cli/  ide/
+  language/   AST, document parser, (M2) sentence grammar, diagnostics
+  space/      plane, volume (semantic model), (M1) orientation
+  runtime/    (M1+) machine, movement, trace, outcomes
+  temporal/   (M3+) symbols, versions, constraints, solver
+  format/     formatter, projections, plane refactors
+  container/  document I/O, pack / unpack
+  v1/         the v1 interpreter, frozen until v2 can replace it
 ```
 
-Pipeline:
-
 ```
-bytes → decode → SpaceDoc → resolve refs → Program(planes, z order)
-      → per cell: morphology → frame match → Act | Relation | Control
-      → check → run: machine ⇄ time (§8) → Outcome + trace
+source ──parse──▶ AST ──resolve──▶ semantic model (Space) ──run──▶ outcome + trace
+              (language/)        (space/)                   (runtime/ ⇄ temporal/)
 ```
 
-CLI: `y3 run | trace | check | fmt [--projection flat|perspective|strong] | unpack | pack | new`.
+The parser produces data, never closures or behaviour. The runtime consumes the
+semantic model only.
+
+CLI: `y3 check | fmt [--projection flat|perspective|strong] [--write] | unpack | pack`,
+and later `run | trace`. v1's `validate | run | trace` keep working on v1 files until
+v2 runs programs (M2).
 
 ---
 
@@ -186,43 +160,49 @@ CLI: `y3 run | trace | check | fmt [--projection flat|perspective|strong] | unpa
 ### 2.1 EBNF
 
 ```ebnf
-file        = [ frontmatter ] , volume , [ appendix ] ;
-frontmatter = "+++" , NL , toml , "+++" , NL ;
-volume      = plane , { { blank } , plane } ;
+file        = [ frontmatter ] , { trivia } , volume , [ appendix ] , { trivia } ;
+frontmatter = "+++" , NL , { toml-line } , "+++" , NL ;
+volume      = plane-slot , { { trivia } , plane-slot } ;
+plane-slot  = ws , "⟦" , ws , ref , ws , "⟧" , NL       (* referenced *)
+            | inline-plane ;
+inline-plane= ws , "⟦" , ws , row , ws , "⟧" , NL       (* one-row form *)
+            | ws , "⟦" , ws , NL , row-line , { row-line } , ws , "⟧" , ws , NL ;
+row-line    = ws , row , ws , NL ;
+row         = cell , { ws , cell } ;
+cell        = "[" , { cell-char | quoted } , "]" ;      (* blank or spaces = empty cell *)
+quoted      = '"' , { char - ( '"' | "\" ) | "\" , char } , '"' ;
+cell-char   = char - ( "[" | "]" | '"' | NL ) ;
 
-plane       = ws , "⟦" , ws , ( ref , ws , "⟧"                  (* referenced *)
-                               | row , ws , "⟧"                  (* one-row inline *)
-                               | NL , row , NL , { row , NL } , ws , "⟧" ) , NL ;
+appendix    = ws , "※" , ws , NL , { { trivia } , definition } ;
+definition  = ws , ref , ws , inline-plane ;            (* a definition is never a ref *)
 ref         = ":" , name , ":" ;
-row         = ws , cell , { gap , cell } , ws ;
-cell        = "[" , [ ws , sentence , ws ] , "]" ;     (* "[ ]" = empty cell *)
-sentence    = { char - ( "[" | "]" ) | quoted } , "." ; (* §5; must end in "." *)
-quoted      = '"' , { char - '"' | '\"' } , '"' ;
-
-appendix    = "※" , NL , { { blank } , ref , ws , plane } ;
-name        = ( hangul | letter | "_" ) , { hangul | letter | digit | "_" | "-" } ;
-comment     = ws , "#" , { char } , NL ;   (* only outside planes *)
-ws = { " " | "\t" } ;   gap = ws ;
+name        = ( letter | "_" ) , { letter | digit | "_" | "-" } ;   (* letter includes Hangul *)
+trivia      = blank-line | comment-line ;
+comment-line= ws , "#" , { char } , NL ;                (* never inside a plane *)
+ws          = { " " | "\t" } ;
 ```
 
 ### 2.2 Layout rules
 
-1. **Plane order defines z.** The *n*-th plane in the volume has `z = n`.
-2. **Inside a plane, row index defines y and cell index defines x.** Origin is the
-   top-left corner, x increases east and y increases south (like a floor plan).
-3. **Planes are rectangular.** Every row has the same number of cells. Use `[ ]`
-   for empty cells. The formatter can pad. Ragged rows are a parse error, so a
-   missing cell can never be a silent typo.
-4. **Planes may differ in size.** A 2×3 floor can sit under a 1×5 floor.
-5. **Whitespace outside `[ ]` is never read.** That covers leading indentation,
-   gaps between cells, and blank lines between planes.
-   *Indentation is projection, not syntax.*
+1. **Plane order defines z.** The *n*-th plane slot of the volume is `z = n`.
+2. **Inside a plane, row index defines y and cell index defines x.** The origin is the
+   top-left cell, x increases to the east, and y increases to the south (a floor plan).
+3. **Planes are rectangular.** Every row has the same number of cells, so a missing
+   cell is never a silent typo. `[ ]` is a real cell that does nothing.
+4. **Outside every rectangle is VOID.** There is no implicit padding and no wrap.
+5. **Planes may differ in size.** A 1×5 floor can sit over a 1×8 floor.
+6. **Whitespace outside `[ ]` is never read.** That covers leading indentation, gaps
+   between cells, and blank lines. *Indentation is projection, not syntax.*
+7. **Inside a cell, runs of whitespace (outside quotes) mean one space.** The sentence's
+   leading and trailing whitespace is dropped.
+8. **Comments** are `#` lines outside planes. Each comment block belongs to the item that
+   follows it. Comments after the last item belong to the end of the document.
 
 ### 2.3 Projection: the formatter's job
 
-Same space, three renderings. The parser produces an identical `Program` from each.
+The same space has three renderings, and parsing any of them gives the same AST.
 
-`flat`:
+`flat` (indent 0):
 
 ```
 ⟦
@@ -236,7 +216,7 @@ Same space, three renderings. The parser produces an identical `Program` from ea
 ⟧
 ```
 
-`perspective` (default; indent 4 per plane):
+`perspective` (default and canonical; indent 4 per layer):
 
 ```
 ⟦
@@ -250,7 +230,7 @@ Same space, three renderings. The parser produces an identical `Program` from ea
     ⟧
 ```
 
-`strong` (indent 5 per plane, and **gap and padding shrink with depth**):
+`strong` (indent 5 per layer; gaps and padding shrink with depth):
 
 ```
 ⟦
@@ -269,14 +249,12 @@ Same space, three renderings. The parser produces an identical `Program` from ea
           ⟧
 ```
 
-How far narrowing can go: a formatter can only shrink what it adds, which is
-inter-cell gaps and column-alignment padding. It can **never** drop or abbreviate
-cells. Front planes get aligned columns and wide gaps; deep planes get tight, unpadded rows.
-That is a lossless perspective, and it's the only kind allowed, because
-*visual perspective is not geometry*.
+The formatter can only shrink what it adds: gaps and column-alignment padding,
+measured in display columns, where Hangul counts as two. It can **never** drop or
+abbreviate cells. *Visual perspective is not geometry.*
 
-The IDE adds `orthographic`, `top`, `side`, and `exploded` as views of the
-same `Program`. These are never written back as different code.
+In the appendix, definitions are ordered by first reference in the volume, and unused
+ones come last in name order. Definitions sit at indent 0.
 
 ---
 
@@ -284,14 +262,15 @@ same `Program`. These are never written back as different code.
 
 ### 3.1 State
 
-The pointer's **pose** is position `p = (x, y, z)` plus orientation `(f, u)`:
-**forward** and **up**, two perpendicular unit axis vectors. There are exactly
-**24** such pairs, which are the rotations of a cube. **Right** is derived as
-`r = u × f`.
+The pointer's **pose** is a position `p = (x, y, z)` and an orientation `(f, u)`:
+**forward** and **up**, two perpendicular axis vectors. These give the **24** rotations
+of a cube. **Right** is `r = u × f`.
 
 Axes: `동 = +x`, `남 = +y`, `위 = +z` (floors), with `서`, `북`, `아래` as the opposites.
-The default pose is `(0,0,0)`, facing `동`, up `위`, so right is `남`. Facing east on
-a floor plan, your right hand points south.
+
+**Default pose: `(0,0,0)`, facing `남`, up `위`, so right is `서`.** Sentences are
+written one per row, so reading goes down the page. (Facing south on a floor plan,
+your right hand points west.)
 
 ### 3.2 Three verbs, three concepts
 
@@ -299,59 +278,50 @@ a floor plan, your right hand points south.
 |---|---|---|
 | `[오른쪽을 본다.]` `[왼쪽을 본다.]` `[뒤를 본다.]` | turn (body frame) | `f ← r`, `f ← −r`, `f ← −f` |
 | `[위를 본다.]` `[아래를 본다.]` | pitch (body frame) | `(f,u) ← (u, −f)`, `(f,u) ← (−u, f)` |
-| `[동쪽을 본다.]` (and 서/남/북) | absolute face | `f ← compass`, `u ← 위` (resets roll) |
+| `[동쪽을 본다.]` (and 서/남/북) | absolute face | `f ← compass`, `u ← 위` |
 | `[앞으로 간다.]` and `뒤로`, `오른쪽으로`, `왼쪽으로`, `위로`, `아래로` | step (body frame) | move once by `f`, `−f`, `r`, `−r`, `u`, `−u`; **orientation unchanged** |
 | `[위층으로 간다.]` `[아래층으로 간다.]` | translate (world frame) | `z ← z ± 1`; x, y and orientation unchanged |
 
-Rules:
+- **`간다` replaces this step's normal advance.** The pointer lands on the target cell,
+  executes it next, then continues along `f`. Continuous travel through floors happens
+  only if you *face* along z (`위를 본다`) and keep walking.
+- **`층` belongs to the building; `위` belongs to the body.** In the default pose,
+  `위로 간다` and `위층으로 간다` coincide; after a pitch or roll they don't.
+- Turning is meaningful while facing ±z, because `r = u × f` is always defined.
 
-- **`간다` replaces this step's normal advance.** The pointer lands on the target
-  cell, executes it next, and then continues along `f`. Nothing ever starts
-  "flying" unless you *face* along z with `위를 본다` and keep walking. Continuous
-  vertical travel is therefore always deliberate.
-- **`층` belongs to the building; `위` belongs to the body.** With the default pose
-  `위로 간다` and `위층으로 간다` coincide. After `위를 본다` or a roll they don't:
-  `층` is always ±z, while `위로` follows your up vector.
-- Turning left or right is meaningful while facing ±z, because `r = u × f` is
-  always defined. This fixes the v1 bug where rotation was degenerate on the z axis.
+### 3.3 Edges
 
-### 3.3 Advancing and edges
+Each step executes the current cell, then advances one cell along `f`, unless the cell
+moved the pointer itself.
 
-Each step executes the current cell, then advances one cell along `f` (or follows
-the cell's `간다` / control effect).
-
-- **Line wrap.** If facing `동` and stepping off the east edge, go to `(0, y+1)` on
-  the same plane: rows read like lines of text. Off the last row, the plane reaches
-  its **끝**.
-- **Other in-plane edges.** Stepping off west, north or south also reaches the plane's 끝.
-- **Into the void.** Any z move (a translation, `위로` / `아래로`, or walking along ±z)
-  onto a plane that doesn't exist, or to an `(x, y)` outside that plane's rectangle,
-  halts with `VOID`.
+- **Any move to a position with no cell is `VOID`.** That includes walking past a
+  plane's edge, translating to a floor whose rectangle doesn't contain `(x, y)`, and
+  moving to a z that has no layer.
+- Programs end deliberately with `[끝이다.]` (§4). VOID is a distinct outcome, not a
+  normal end.
 
 ---
 
-## 4. Scenes: `처음`, `끝`, and the flow between planes
+## 4. Cycles: `처음` and `끝`
 
-Each plane has **one `처음`**: a cell plus an orientation. By default it is where the
-pointer first entered the plane, or `(0,0)` facing `동` if the plane has never been
-entered. `[여기가 처음이다.]` moves it to the current cell and orientation.
+Loops are **anchors inside spatial execution**, and a plane can hold any number of them.
 
-A **scene** is one cycle of a plane: it starts when the pointer begins at the
-plane's 처음 and ends at the plane's 끝. Leaving spatially (`층`) suspends nothing and
-ends nothing. If you come back, the scene is still open.
-
-| Sentence / event | Tense | Effect |
+| Sentence | Tense | Effect |
 |---|---|---|
-| reaching 끝 by walking off | — | the scene ends; **flow** to the next plane in volume order (z+1), at its 처음. If there is none, `HALT`. |
-| `[끝이다.]` | present → act | end the scene now, then flow as above (**break**) |
-| `[끝은 처음이다.]` | present → act | end the scene now, start a new scene of *this* plane at its 처음 (**continue**) |
-| `[여기가 처음이다.]` | present → act | set this plane's 처음 here; start a new scene (takes a snapshot) |
-| `[처음은 끝이었다.]` | past → relation | when this scene ends, each noun touched in it must equal its value at the scene's start (**fixed point / invariant**, §7) |
+| `[여기가 처음이다.]` | present → act | opens a cycle anchored here (this cell, this orientation). Running an anchor that is already open starts its next iteration, after closing any cycles opened inside it. |
+| `[끝은 처음이다.]` | present → act | ends the current iteration of the innermost cycle and returns to its anchor, which runs next (**continue**) |
+| `[⟨조건⟩ 끝은 처음이다.]` | present → control | if the condition holds, continue; **if not, the innermost cycle closes** and execution moves on (a do-while exit) |
+| `[끝이다.]` | present → act | the end of the run: close every cycle (innermost first), then `HALT` |
+| `[처음은 끝이었다.]` | past → relation | when the current iteration ends, every noun written during it must equal its value at the iteration's start (**fixed point / invariant**) |
 
-There are two ways to reach the next plane, and the difference is the point:
+Why a failed `끝은 처음이다` closes the cycle: *값이 0이 아니면 끝은 처음이다* reads
+"unless 값 is 0, the end is the beginning". When 값 is 0, the end is just the end.
 
-- **through space**: `위층으로 간다` keeps your x, y and heading (translation)
-- **through time**: an ending (`끝`) takes you to the next plane's beginning (`처음`)
+Cycles nest because they form a stack. Returning to an outer anchor discards any inner
+cycles that are still open, so spatial detours (§7, Example 1) are safe.
+
+`일 것이다` promises and `처음은 끝이었다` relations attach to the innermost open
+iteration. With no cycle open, they attach to the end of the run.
 
 ---
 
@@ -359,240 +329,213 @@ There are two ways to reach the next plane, and the difference is the point:
 
 ### 5.1 Data lives in nouns, not a stack
 
-There is no stack. Every value has a name: any Hangul noun the program introduces
-(`값`, `수`, `결과`, `문장`, `원래`, …). Values are integers or text. A noun must be
-introduced (by `이다`, `미정이다`, `듣는다`, or `온다`) before it is read; otherwise
-it's a static error.
+Every value has a name: any Hangul noun the program introduces (`값`, `수`, `결과`,
+`문장`, `원래`, …). Values are `bigint` integers or text. A noun must be introduced
+(by `이다`, `미정이다`, `듣는다`, or `온다`) before it is read.
 
 ### 5.2 Particles assign roles; word order is free
 
 | Particle | Role | Example |
 |---|---|---|
-| `은/는` | topic: the noun being stated about | `[값은 3이다.]` |
-| `이/가` | subject (conditions, arrivals) | `[값이 0이면 끝이다.]` `[수가 다음에서 온다.]` |
-| `을/를` | object / amount | `[값을 말한다.]` `[1을 더한다]` |
+| `은/는`, `이/가` | subject / topic | `[값은 3이다.]` `[값이 0이면 끝이다.]` |
+| `을/를` | object / amount | `[값을 말한다.]` |
 | `에` | target | `[값에 1을 더한다.]` → 값 := 값 + 1 |
 | `에서` | source | `[값에서 1을 뺀다.]` → 값 := 값 − 1 |
-| `으로/로` | direction, destination, means | `[위층으로 간다.]` `[값을 2로 나눈다.]` `[문장을 전으로 보낸다.]` |
+| `으로/로` | direction, destination, means | `[위층으로 간다.]` `[값을 2로 나눈다.]` |
 | `의` | temporal anchor | `[처음의 값은 0이었다.]` |
 | `보다` | comparison | `[값이 3보다 크면 …]` |
 
-Roles come from particles, not positions, so `[값에 1을 더한다.]` ≡ `[1을 값에 더한다.]`.
-The formatter can normalise the order. The grammar is a **case-frame table**: each
-verb lists the roles it requires.
+Roles come from particles, so `[값에 1을 더한다.]` ≡ `[1을 값에 더한다.]`.
 
 | Verb | Frame | Act |
 |---|---|---|
 | `더한다` | `N에` + `E을` | N := N + E |
 | `뺀다` | `N에서` + `E을` | N := N − E |
-| `곱한다` | `N에` + `E을` | N := N × E (one side must be known, §6.4) |
-| `나눈다` | `N을` + `E로` | N := N ÷ E (N and E must be known) |
+| `곱한다` | `N에` + `E을` | N := N × E (one side known, §6.3) |
+| `나눈다` | `N을` + `E로` | N := N ÷ E (both known) |
 | `말한다` | `E을` | output E as one line |
 | `듣는다` | `N을` | N := next input, or a fresh unknown if input is exhausted |
 | `본다` | `D을` | turn (§3) |
 | `간다` | `D으로` | step / translate (§3) |
-| `온다` | `N이` + `다음에서` | open a channel (§6.3) |
-| `보낸다` | `N을` + `전으로` | close a channel (§6.3) |
+| `온다` | `N이` + `다음에서` | open a channel (§6.2) |
+| `보낸다` | `N을` + `전으로` | close a channel (§6.2) |
 
 ### 5.3 Only the copula conjugates
 
-Actions are always present tense (`더한다`, `간다`). **States** carry tense, through
-the copula:
-
 | Form | Tense | Kind | Meaning |
 |---|---|---|---|
-| `N은 E이다` | present | **act** | write: N := E (a new version; replaces) |
-| `N은 미정이다` | present | **act** | write: N := a fresh unknown |
-| `N은 E이었다` / `였다` | past | **relation** | assert: N's current value equals E (it reveals; it never writes) |
-| `N은 E일 것이다` | future | **relation** | promise: N's value at this scene's 끝 equals E |
+| `N은 E이다` | present | **act** | write N := E (a new version) |
+| `N은 미정이다` | present | **act** | write N := a fresh unknown |
+| `N은 E이었다` / `였다` | past | **relation** | assert: N's current version equals E (never writes) |
+| `N은 E일 것이다` | future | **relation** | promise: N equals E when the current iteration (or the run) ends |
 | `N이 E이면 ⟨act⟩` | present | **control** | if N = E (both known), do the act |
 | `N이 E일 것이라면 ⟨act⟩` | future | **control** | *experimental* (§9) |
 
-A slogan for teaching: **이다 replaces, 였다 reveals, 일 것이다 promises.**
+Verbs stay in present tense in core (`더한다`, never `더했다`): *actions happen now;
+only states have tense.* `정해지지 않았다` would be past tense and so a relation; the
+act form is `[값은 미정이다.]`.
 
-`정해지지 않았다` from your sketch is past tense, so under the tense rule it would be a
-relation, not an act. The act form is `[값은 미정이다.]` (未定). The tense rule holds
-with no exceptions.
-
-Past and future **verb** forms (`더했다`, `더할 것이다`) are parse errors in core:
-"actions happen now; only states have tense." §11 parks past-tense verbs as an
-experimental way to describe transitions.
-
-### 5.4 Morphology algorithm (deterministic)
+### 5.4 Morphology (deterministic)
 
 1. The cell text must end in `.`, which is stripped.
 2. Split into eojeols on spaces. A quoted literal is one token.
-3. **Predicate.** Match the final eojeol(s) right-to-left against the closed table:
-   `…일 것이라면`, `…일 것이다`, `…이었다`, `…였다`, `…이다`, `…이면`, `…가 아니면`,
-   `…보다 크면` / `작으면`, then the verb list. The longest match wins. What remains of
-   that eojeol is the predicate's value expression.
-4. **Noun phrases.** Each other eojeol must be *exactly one* noun or literal followed by
-   *exactly one* particle. Strip the longest particle whose allomorph agrees with the
-   remainder; the remainder must be a literal, a reserved word, or a known noun. A
-   noun's first introduction strips the single longest particle.
-5. **Frame match.** Look up the predicate in the frame table and check the role set.
-   Missing or extra roles are errors.
+3. **Predicate.** Match the final eojeol(s) right-to-left against the closed table
+   (`…일 것이라면`, `…일 것이다`, `…이었다`, `…였다`, `…이다`, `…이면`, `…이 아니면`,
+   `…보다 크면` / `작으면`, then the verbs). The longest match wins.
+   A conditional sentence is the condition clause up to the first eojeol ending in
+   `면`, followed by one consequence clause.
+4. **Noun phrases.** Each other eojeol is exactly one noun or literal plus exactly one
+   particle.
+5. **Frame match.** Missing or extra roles are errors.
 
-### 5.5 Agreement is enforced
+### 5.5 Orthography is lint (D4)
 
-The 받침 (final consonant) of the preceding word selects the allomorph, and the parser
-checks it:
-
-| Pair | After consonant | After vowel | Notes |
+| Pair | Canonical after consonant | Canonical after vowel | Status |
 |---|---|---|---|
-| topic | 은 | 는 | |
-| subject | 이 | 가 | |
-| object | 을 | 를 | |
-| direction | 으로 | 로 | ㄹ-final also takes 로: `1로`, `둘로` |
-| past copula | 이었다 | 였다 | `3이었다`, `4였다` |
+| 은/는, 이/가, 을/를, 와/과 | 은, 이, 을, 과 | 는, 가, 를, 와 | lint |
+| 으로/로 | 으로 (ㄹ-final takes 로) | 로 | lint |
+| 이었다/였다 | 이었다 | 였다 | lint |
+| 은·는 vs 이·가 in a statement | topic form | | lint |
 
-- Numerals use the **Sino-Korean reading** of the whole number's final syllable:
-  - `3` 삼 (ㅁ) → `3이었다`
-  - `4` 사 (vowel) → `4였다`
-  - `1` 일 (ㄹ) → `1로`
-  - `10` 십 (ㅂ) → `10을`
-  - `20` 이십 → `20을`
-  - `1000` 천 → `1000을`
-- Text literals use their last Hangul syllable. A non-Hangul ending accepts either
-  form.
-- `이다`, `이면` and `일 것이다` are always written in full: Y3 does not contract to `다`
-  or `면`.
+- **Parser:** accepts either form, because the meaning is identical.
+- **Diagnostic:** reports non-canonical Korean as a warning, with the fix.
+- **Formatter:** rewrites to the canonical form.
 
-The examples in your message already agree (`3이었다`, `4였다`). Agreement errors
-come with a fix: `y3 fmt` corrects them, and `y3 check` explains them.
+Numbers use their Sino-Korean reading: `3` 삼 → `3이었다`, `4` 사 → `4였다`, `1` 일 → `1로`,
+`10` 십 → `10을`. Text literals use their last Hangul syllable, and a non-Hangul ending
+has no canonical form.
 
-**Tense / anchor agreement.** A subject anchored with `처음의` takes past tense; one
-anchored with `끝의` takes future tense. `[처음의 값은 3일 것이다.]` is a parse error.
+**What stays semantic:** the role particles (`에`, `에서`, `을/를`, `으로/로`, `의`, `보다`),
+tense (`이다` / `였다` / `일 것이다`), and the conditional ending `면`. Getting these wrong
+changes the meaning, so they are errors, not lint.
 
-Static checks (`y3 check`):
-- agreement
-- tense and anchor agreement
-- nouns read before they're introduced
-- planes that can't be reached
-- `보낸다` with no matching `온다` anywhere
-- translations that can never land
+**Ambiguity rule:** if accepting a non-canonical allomorph would give two different
+parses (two different known nouns), the canonical parse wins. If it doesn't exist, the
+parser reports an error asking for a respelling.
 
 ---
 
-## 6. The temporal model (smallest viable)
+## 6. The temporal model
 
-### 6.1 State
+### 6.1 What the runtime keeps (D3)
+
+The runtime does **not** keep past machine states: no past positions, orientations,
+cycle stacks, or stores. It keeps only the symbolic material that temporal constraints
+refer to:
 
 ```
-Term      = Int | Text | α (unknown) | Σ cᵢ·αᵢ + c   (affine; coefficients known integers)
-Store     = noun → Term                                (current version only)
+Version   = { id, noun, term, born: step }          immutable; every write makes one
+Term      = bigint | text | unknown | Σ cᵢ·αᵢ + c   (affine, known integer coefficients)
 Unknown   = { id, origin: 미정 | 다음 | 입력, born: step, provenance? }
-Equations = solved substitution + pending linear system
-Promise   = { plane, scene, noun, term, made: step }
+Store     = noun → current Version id               (current only)
+Snapshot  = per open iteration: noun → Version id   (ids, not values or states)
+Equation  = { left: Term, right: Term, why: statement + step }
+Promise   = { iteration | run, noun, term, made: step }
 Channel   = per-noun stack of open slots { unknown, opened: step }
-Snapshot  = per plane: Store at the current scene's start   (for 처음 / 처음은 끝이었다)
-Output    = list of Terms; flushed in order up to the first unresolved one
+Output    = [Term]; flushed in order up to the first undetermined term
 ```
 
-There is **no history log.** `였다` talks about the current value, which the
-sentence itself doesn't change. `일 것이다` and `처음은 끝이었다` are promises checked at
-a scene's end. `처음의 N` reads the snapshot. That's all the past the machine keeps.
+Take the retrocausal example:
 
-### 6.2 Solving
+```
+v0 = α            (값은 미정이다 — α born)
+v1 = α + 1        (값에 1을 더한다 — a new version, term over α)
+constraint v1 = 4 (값은 4였다)  ⇒  α + 1 = 4  ⇒  α = 3
+```
+
+`v0` and `v1` are kept because their terms mention an unknown that is still unresolved.
+They are values and dependencies, not snapshots of the machine. A version whose term is
+fully determined, and which no snapshot, promise, slot or held output refers to, can be
+discarded.
+
+The debugging trace is a separate, optional record that plays no part in semantics.
+
+### 6.2 Solving and channels
 
 - **Unification plus Gaussian elimination** over linear integer equations, run
-  incrementally as each equation arrives. Text unknowns only unify.
-- An equation with no rational solution, or whose unique solution isn't an integer,
-  is a `PARADOX`.
-- An unknown that ends the run undetermined is harmless *unless output depends on
-  it*; if output does, the outcome is `AMBIGUOUS`.
-- There is no disjunction, no inequality, and no search in core. Every resolution
-  is one explainable trace line:
-  `α = 3 because α + 1 = 4 (t5: [값은 4였다.])`.
-
-### 6.3 Temporal channels (`전` / `다음`)
-
+  incrementally as each equation arrives. Text unknowns only unify. A system with no
+  solution, or whose unique solution isn't an integer, is a `PARADOX`. An undetermined
+  unknown that output depends on is `AMBIGUOUS` at the end.
 - `[N이 다음에서 온다.]` sets N := a fresh unknown β and pushes an open slot for N.
-- `[N을 전으로 보낸다.]` pops N's most recent open slot (β) and adds the equation
-  `β = current N`. With no open slot, it's a `PARADOX`: no past is listening.
-- A channel is therefore *sugar over unknowns and equations*. The slot structure is
-  kept because it lets the trace show the causal loop.
+- `[N을 전으로 보낸다.]` pops N's most recent slot and adds `β = current N`. With no
+  open slot, it's a `PARADOX`: no past is listening.
+
+### 6.3 Limits that keep it small
+
+Multiplying an unknown by an unknown, dividing an unknown, and comparing or branching
+on an unknown all make the run `UNRESOLVED`. *Time solves straight lines.*
 
 ### 6.4 Provenance
-
-Each unknown is marked when it resolves:
 
 | Mark | When |
 |---|---|
 | **소급 RETRO** | determined by an equation made later in time than the unknown's birth |
-| **자기원인 SELF_CAUSED** | determined, born on a channel, and the term sent back to its slot contains that same unknown (it caused itself). No present-tense act and no input contributed its value; past/future statements may pin it, because testimony is not a cause (Example 3d). |
-
-Operations that would make a term non-linear (an unknown times an unknown, division
-of an unknown) are `UNRESOLVED` in core: **time only solves straight lines.**
+| **자기원인 SELF_CAUSED** | born on a channel; the term sent back to its slot contains that same unknown; no present-tense act or input contributed its value. Past and future statements may pin it, because testimony is not a cause. |
 
 ### 6.5 Outcomes
 
 | Status | 진단 | Exit | Meaning |
 |---|---|---|---|
-| `HALT` | 정지 | 0 | ran to the end; consistent; all output determined |
-| `VOID` | 허공 | 2 | translated into space that doesn't exist |
+| `HALT` | 정지 | 0 | reached `끝이다`; consistent; all output determined |
+| `FAULT` | 고장 | 1 | ordinary error (division by zero, `끝은 처음이다` with no open cycle) |
+| `VOID` | 허공 | 2 | moved to a position with no cell |
 | `STEP_LIMIT` | 한계 | 3 | step budget exhausted |
-| `PARADOX` | 역설 | 4 | constraints are inconsistent (the report names both statements) |
-| `UNRESOLVED` | 미결 | 5 | control needed a value only the future could decide |
+| `PARADOX` | 역설 | 4 | constraints are inconsistent (both statements named) |
+| `UNRESOLVED` | 미결 | 5 | control needed a value that only the future could decide |
 | `AMBIGUOUS` | 중의 | 6 | consistent, but some output has more than one consistent value |
-| `FAULT` | 고장 | 1 | ordinary error (e.g. division by zero) |
 
 ---
 
 ## 7. Worked examples
 
-Trace columns: **t** step · **pos** `(x,y,z)` · **pose** facing/up · **cell** · **effect**.
+Trace columns: **t** step · **pos** `(x,y,z)` · **cell** · **effect**. The pose is the
+default (facing 남, up 위) unless stated.
 
-### Example 1 — conditional, loop, and a detour downstairs
-
-Count down from 3, say "둘" on the way past 2, then launch.
+### Example 1 — conditional, loop, and a detour upstairs
 
 ```
 ⟦
-[값은 3이다.]       [끝이다.]
-["둘"을 말한다.]    [ ]
-[위층으로 간다.]    [ ]
+[값은 3이다.]
+[여기가 처음이다.]
+[값을 말한다.]
+[값이 2이면 위층으로 간다.]
+[값에서 1을 뺀다.]
+[값이 0이 아니면 끝은 처음이다.]
+["발사"를 말한다.]
+[끝이다.]
 ⟧
 
     ⟦
-    [값을 말한다.]
-    [값이 2이면 아래층으로 간다.]
-    [값에서 1을 뺀다.]
-    [값이 0이면 끝이다.]
-    [끝은 처음이다.]
+    [ ]
+    [ ]
+    [ ]
+    ["둘"을 말한다.]
+    [아래층으로 간다.]
     ⟧
-
-        ⟦
-        ["발사"를 말한다.]
-        ⟧
 ```
 
-- Floor 0 (2×3) is a prelude, and also a basement for the detour.
-- Floor 1 (1×5) is the loop.
-- Floor 2 (1×1) is the ending.
-
-| t | pos | pose | cell | effect |
-|---|---|---|---|---|
-| 1 | (0,0,0) | 동/위 | `값은 3이다.` | 값 := 3 |
-| 2 | (1,0,0) | 동/위 | `끝이다.` | floor 0 scene ends → flow to floor 1's 처음 (0,0) |
-| 3 | (0,0,1) | 동/위 | `값을 말한다.` | out `3`; east edge → wrap |
-| 4 | (0,1,1) | | `값이 2이면 아래층으로 간다.` | 3 ≠ 2 → wrap |
-| 5 | (0,2,1) | | `값에서 1을 뺀다.` | 값 := 2 |
-| 6 | (0,3,1) | | `값이 0이면 끝이다.` | 2 ≠ 0 |
-| 7 | (0,4,1) | | `끝은 처음이다.` | scene 1#1 ends; scene 1#2 starts at (0,0) |
-| 8 | (0,0,1) | | `값을 말한다.` | out `2` |
-| 9 | (0,1,1) | | `값이 2이면 아래층으로 간다.` | 2 = 2 → translate to (0,1,0) |
-| 10 | (0,1,0) | 동/위 | `"둘"을 말한다.` | out `둘` → (1,1,0) |
-| 11 | (1,1,0) | | `[ ]` | wrap → (0,2,0) |
-| 12 | (0,2,0) | | `위층으로 간다.` | translate to (0,2,1); scene 1#2 is still open |
-| 13 | (0,2,1) | | `값에서 1을 뺀다.` | 값 := 1 |
-| 14 | (0,3,1) | | `값이 0이면 끝이다.` | 1 ≠ 0 |
-| 15 | (0,4,1) | | `끝은 처음이다.` | scene 1#3 |
-| 16 | (0,0,1) | | `값을 말한다.` | out `1` |
-| 17 | (0,1,1) | | `값이 2이면 …` | 1 ≠ 2 |
-| 18 | (0,2,1) | | `값에서 1을 뺀다.` | 값 := 0 |
-| 19 | (0,3,1) | | `값이 0이면 끝이다.` | 0 = 0 → scene ends → flow to floor 2's 처음 |
-| 20 | (0,0,2) | | `"발사"를 말한다.` | out `발사`; wrap off last row → 끝 → no floor 3 |
+| t | pos | cell | effect |
+|---|---|---|---|
+| 1 | (0,0,0) | `값은 3이다.` | 값 := 3 |
+| 2 | (0,1,0) | `여기가 처음이다.` | open cycle A, iteration 1 |
+| 3 | (0,2,0) | `값을 말한다.` | out `3` |
+| 4 | (0,3,0) | `값이 2이면 위층으로 간다.` | 3 ≠ 2 |
+| 5 | (0,4,0) | `값에서 1을 뺀다.` | 값 := 2 |
+| 6 | (0,5,0) | `값이 0이 아니면 끝은 처음이다.` | 2 ≠ 0 → back to A |
+| 7 | (0,1,0) | `여기가 처음이다.` | A, iteration 2 |
+| 8 | (0,2,0) | `값을 말한다.` | out `2` |
+| 9 | (0,3,0) | `값이 2이면 위층으로 간다.` | 2 = 2 → translate to (0,3,1) |
+| 10 | (0,3,1) | `"둘"을 말한다.` | out `둘` |
+| 11 | (0,4,1) | `아래층으로 간다.` | translate to (0,4,0) |
+| 12 | (0,4,0) | `값에서 1을 뺀다.` | 값 := 1 |
+| 13 | (0,5,0) | `값이 0이 아니면 끝은 처음이다.` | 1 ≠ 0 → back to A |
+| 14 | (0,1,0) | `여기가 처음이다.` | A, iteration 3 |
+| 15 | (0,2,0) | `값을 말한다.` | out `1` |
+| 16 | (0,3,0) | `값이 2이면 위층으로 간다.` | 1 ≠ 2 |
+| 17 | (0,4,0) | `값에서 1을 뺀다.` | 값 := 0 |
+| 18 | (0,5,0) | `값이 0이 아니면 끝은 처음이다.` | 0 = 0 → **cycle A closes**; move on |
+| 19 | (0,6,0) | `"발사"를 말한다.` | out `발사` |
+| 20 | (0,7,0) | `끝이다.` | `HALT` |
 
 ```
 3
@@ -603,26 +546,11 @@ Count down from 3, say "둘" on the way past 2, then launch.
 진단: 정지 (HALT) · 20보
 ```
 
-The branch is a **stairwell**: floor 1's cell (0,1) sits directly above the basement
-cell that handles it, and the basement's exit (0,2) sits directly below the cell
-where the loop resumes. The alignment *is* the control flow.
-
-A single-plane loop with its prelude in the same plane uses `여기가 처음이다`:
-
-```
-⟦
-[값은 5이다.]
-[여기가 처음이다.]
-[값을 말한다.]
-[값에서 1을 뺀다.]
-[값이 0이면 끝이다.]
-[끝은 처음이다.]
-⟧
-```
-
-This prints `5 4 3 2 1`. Without `여기가 처음이다`, the loop would restart at
-`값은 5이다` forever, and the step limit would report `한계`. That was the bug hiding
-in the single-plane sketch from your message.
+The branch is a **stairwell**: floor 1's row 3 lies directly above the conditional, and
+its row 4 lies directly above the cell where the loop resumes. Floor 1's blank cells
+are what keep the alignment, and the projection shows them as a narrower, shorter
+floor. Without `[끝이다.]`, step 20 would walk off the plane and the outcome would be
+`허공 (VOID)`.
 
 ### Example 2 — the future determines the past
 
@@ -632,32 +560,35 @@ in the single-plane sketch from your message.
 [원래는 값이다.]
 [값에 1을 더한다.]
 [원래를 말한다.]
+[위층으로 간다.]
 ⟧
 
     ⟦
+    [ ]
+    [ ]
+    [ ]
+    [ ]
     [값은 4였다.]
+    [끝이다.]
     ⟧
 ```
 
 | t | pos | cell | machine | time |
 |---|---|---|---|---|
-| 1 | (0,0,0) | `값은 미정이다.` | 값 := α | α born (미정, t1) |
-| 2 | (0,1,0) | `원래는 값이다.` | 원래 := α | |
-| 3 | (0,2,0) | `값에 1을 더한다.` | 값 := α+1 | |
-| 4 | (0,3,0) | `원래를 말한다.` | output #1 = α, **held** (not yet determined) | |
-| — | | (walk off → floor 0 ends → floor 1) | | |
-| 5 | (0,0,1) | `값은 4였다.` | (relation: no write) | equation α + 1 = 4 ⇒ **α = 3**, marked **소급** (made at t5 about a value born at t1) |
-| — | | output #1 flushes | out `3` | |
+| 1 | (0,0,0) | `값은 미정이다.` | 값 := v0 = α | α born (미정, t1) |
+| 2 | (0,1,0) | `원래는 값이다.` | 원래 := v1 = α | |
+| 3 | (0,2,0) | `값에 1을 더한다.` | 값 := v2 = α + 1 | |
+| 4 | (0,3,0) | `원래를 말한다.` | output #1 = α, **held** | |
+| 5 | (0,4,0) | `위층으로 간다.` | → (0,4,1) | |
+| 6 | (0,4,1) | `값은 4였다.` | (relation: no write) | v2 = 4 ⇒ α + 1 = 4 ⇒ **α = 3** [소급 t6 → t1]; output #1 flushes `3` |
+| 7 | (0,5,1) | `끝이다.` | `HALT` | |
 
 ```
 3
-진단: 정지 (HALT) · 5보 · α = 3 [소급 t5 → t1]
+진단: 정지 (HALT) · 7보 · α = 3 [소급 t6 → t1]
 ```
 
-The `원래` printed at t4 was decided at t5. The trace renders the t2–t4 rows with
-`α (=3, from t5)` in a distinct style, so the retro-fill is visible.
-
-**The same retrocausality with a prophecy instead of testimony** (one plane, future tense):
+**The same thing as a prophecy** (one plane, future tense):
 
 ```
 ⟦
@@ -666,235 +597,220 @@ The `원래` printed at t4 was decided at t5. The trace renders the t2–t4 rows
 [원래는 값이다.]
 [값에 1을 더한다.]
 [원래를 말한다.]
+[끝이다.]
 ⟧
 ```
 
-At t2 the promise "값 at this scene's 끝 = 4" is recorded. At the scene's end, `α+1 = 4`,
-so α = 3, and the output is `3`. The promise was spoken *before* the addition but
-binds what comes *after* it.
+At t2 the promise "값 at the end of the run = 4" is recorded, with no cycle open. At t6
+`끝이다` ends the run: α + 1 = 4, so α = 3, and the output is `3`. The promise was spoken
+*before* the addition but binds what comes *after* it.
 
-**Variants that show the other statuses:**
+**Variants:**
 
-- Add `[원래는 2였다.]` to floor 1, after `값은 4였다`. At t6: α = 3 and α = 2.
+- Add `[원래는 2였다.]` on floor 1, between `값은 4였다` and `끝이다`:
   ```
-  진단: 역설 (PARADOX) · t6 [원래는 2였다.] contradicts t5 [값은 4였다.] (α = 3)
+  진단: 역설 (PARADOX) · t7 [원래는 2였다.] contradicts t6 [값은 4였다.] (α = 3)
   ```
-- Delete floor 1 entirely. α is never determined, and output #1 depends on it.
+- Replace `[위층으로 간다.]` with `[끝이다.]` and delete floor 1:
   ```
   ?
   진단: 중의 (AMBIGUOUS) · α unconstrained (born t1 [값은 미정이다.])
   ```
-- Put `[원래가 3이면 끝이다.]` at floor 0, row 3. At that step 원래 = α is still
-  unknown, and a branch needs a value now.
+- Insert `[원래가 3이면 끝이다.]` before `원래를 말한다`:
   ```
   진단: 미결 (UNRESOLVED) · t4 needs α; only the future could decide it
   ```
 
-### Example 3 — bootstrap loops: ambiguous, self-caused, and paradoxical
+### Example 3 — the bootstrap trio (canonical temporal conformance set)
 
-**3a. A sentence with no origin**
+**3a. β = β → AMBIGUOUS**
 
 ```
 ⟦
 [문장이 다음에서 온다.]
 [문장을 말한다.]
+[위층으로 간다.]
 ⟧
 
     ⟦
+    [ ]
+    [ ]
     [문장을 전으로 보낸다.]
+    [끝이다.]
     ⟧
 ```
 
-| t | cell | machine | time |
-|---|---|---|---|
-| 1 | `문장이 다음에서 온다.` | 문장 := β | β born (다음, t1); slot S₁ opened for 문장 |
-| 2 | `문장을 말한다.` | output #1 = β, held | |
-| 3 | `문장을 전으로 보낸다.` | | close S₁: β = β (tautology); the loop closes on itself |
+| t | pos | cell | machine | time |
+|---|---|---|---|---|
+| 1 | (0,0,0) | `문장이 다음에서 온다.` | 문장 := β | slot S₁ opened (t1) |
+| 2 | (0,1,0) | `문장을 말한다.` | output #1 = β, held | |
+| 3 | (0,2,0) | `위층으로 간다.` | → (0,2,1) | |
+| 4 | (0,2,1) | `문장을 전으로 보낸다.` | | close S₁: β = β (tautology) |
+| 5 | (0,3,1) | `끝이다.` | end | β undetermined; output #1 depends on it |
 
 ```
 ?
 진단: 중의 (AMBIGUOUS) · β is self-consistent but has no unique value
 ```
 
-The loop is **consistent**: no paradox, and the program is legal. But nothing in the
-universe says *which* sentence travelled. Y3 reports that honestly rather than
-inventing one. (§11 parks a "Novikov selection" rule as experimental.)
-
-**3b. A number that caused itself**
+**3b. β = 2β → unique self-caused 0**
 
 ```
 ⟦
 [수가 다음에서 온다.]
 [수에 수를 더한다.]
 [수를 말한다.]
+[위층으로 간다.]
 ⟧
 
     ⟦
+    [ ]
+    [ ]
+    [ ]
     [수를 전으로 보낸다.]
+    [끝이다.]
     ⟧
 ```
 
-| t | cell | machine | time |
-|---|---|---|---|
-| 1 | `수가 다음에서 온다.` | 수 := β | slot S₁ |
-| 2 | `수에 수를 더한다.` | 수 := 2β | |
-| 3 | `수를 말한다.` | output #1 = 2β, held | |
-| 4 | `수를 전으로 보낸다.` | | close S₁: β = 2β ⇒ **β = 0**, marked **자기원인** |
-| — | output flushes | out `0` | |
+| t | pos | cell | machine | time |
+|---|---|---|---|---|
+| 1 | (0,0,0) | `수가 다음에서 온다.` | 수 := β | slot S₁ |
+| 2 | (0,1,0) | `수에 수를 더한다.` | 수 := 2β | |
+| 3 | (0,2,0) | `수를 말한다.` | output #1 = 2β, held | |
+| 4 | (0,3,0) | `위층으로 간다.` | → (0,3,1) | |
+| 5 | (0,3,1) | `수를 전으로 보낸다.` | | close S₁: β = 2β ⇒ **β = 0** [자기원인]; flush `0` |
+| 6 | (0,4,1) | `끝이다.` | `HALT` | |
 
 ```
 0
-진단: 정지 (HALT) · 4보 · β = 0 [자기원인: S₁ t4 → t1]
+진단: 정지 (HALT) · 6보 · β = 0 [자기원인: S₁ t5 → t1]
 ```
 
-This is a valid bootstrap. No literal, no input and no write ever produced the 0.
-It is the only number that can survive its own trip through time: a fixed point that
-caused itself.
+No literal, no input, and no write ever produced the 0. It is the only number that can
+survive its own trip through time.
 
-**3c. The paradox**
+**3c. β = β + 1 → PARADOX**
 
 ```
 ⟦
 [수가 다음에서 온다.]
 [수에 1을 더한다.]
+[위층으로 간다.]
 ⟧
 
     ⟦
+    [ ]
+    [ ]
     [수를 전으로 보낸다.]
+    [끝이다.]
     ⟧
 ```
 
-| t | cell | machine | time |
-|---|---|---|---|
-| 1 | `수가 다음에서 온다.` | 수 := β | slot S₁ |
-| 2 | `수에 1을 더한다.` | 수 := β+1 | |
-| 3 | `수를 전으로 보낸다.` | | close S₁: β = β + 1 ⇒ 0 = 1 |
+| t | pos | cell | machine | time |
+|---|---|---|---|---|
+| 1 | (0,0,0) | `수가 다음에서 온다.` | 수 := β | slot S₁ |
+| 2 | (0,1,0) | `수에 1을 더한다.` | 수 := β + 1 | |
+| 3 | (0,2,0) | `위층으로 간다.` | → (0,2,1) | |
+| 4 | (0,2,1) | `수를 전으로 보낸다.` | | close S₁: β = β + 1 ⇒ 0 = 1 |
 
 ```
-진단: 역설 (PARADOX) · t3 sent β+1 to t1, which received β
+진단: 역설 (PARADOX) · t4 sent β+1 to t1, which received β
 ```
 
-**3d. Testimony, not cause.** Add `[문장은 "날자"였다.]` to 3a's second floor. Then
-β = "날자", the program prints `날자`, and β is marked 자기원인: the only sentence that
-mentions "날자" is past tense, and past tense *never writes*. It is testimony, not
-action. (From 「날개」: *날자. 날자. 한 번만 더 날자꾸나.*)
+**3d. Testimony, not cause.** In 3a, insert `[문장은 "날자"였다.]` between
+`문장을 전으로 보낸다` and `끝이다`. (It must be at or below row 2, where the pointer
+arrives; a cell above the landing point never runs.) β = "날자", the output is `날자`,
+and β is marked 자기원인: past tense never writes.
 
 ### Example 4 — `끝은 처음이다` vs `처음은 끝이었다`
 
-The same two words in a different order and tense give opposite modes:
-
 | Sentence | Tense | Mode | Meaning |
 |---|---|---|---|
-| `[끝은 처음이다.]` | present | act | the end *becomes* the beginning: run again (loop) |
+| `[끝은 처음이다.]` | present | act | the end *becomes* the beginning: run again |
 | `[처음은 끝이었다.]` | past | relation | the beginning *was* the end: start state = end state (x = f(x)) |
 
 ```
 ⟦
 [수는 미정이다.]
+[여기가 처음이다.]
+[수에 수를 더한다.]
+[수에서 3을 뺀다.]
+[처음은 끝이었다.]
+[수를 말한다.]
+[끝이다.]
 ⟧
-
-    ⟦
-    [수에 수를 더한다.]
-    [수에서 3을 뺀다.]
-    [처음은 끝이었다.]
-    [수를 말한다.]
-    ⟧
 ```
 
-| t | cell | machine | time |
-|---|---|---|---|
-| 1 | `수는 미정이다.` | 수 := δ | |
-| — | flow to floor 1; scene starts | snapshot: 수 = δ | |
-| 2 | `수에 수를 더한다.` | 수 := 2δ | |
-| 3 | `수에서 3을 뺀다.` | 수 := 2δ − 3 | |
-| 4 | `처음은 끝이었다.` | | promise: at scene end, 수 = snapshot (δ) |
-| 5 | `수를 말한다.` | output #1 = 2δ − 3, held | |
-| — | scene ends | | 2δ − 3 = δ ⇒ **δ = 3**; output flushes `3` |
+| t | pos | cell | machine | time |
+|---|---|---|---|---|
+| 1 | (0,0,0) | `수는 미정이다.` | 수 := v0 = δ | |
+| 2 | (0,1,0) | `여기가 처음이다.` | open A; snapshot {수: v0} | |
+| 3 | (0,2,0) | `수에 수를 더한다.` | 수 := v1 = 2δ | |
+| 4 | (0,3,0) | `수에서 3을 뺀다.` | 수 := v2 = 2δ − 3 | |
+| 5 | (0,4,0) | `처음은 끝이었다.` | | at A's iteration end: 수 = v0 |
+| 6 | (0,5,0) | `수를 말한다.` | output #1 = 2δ − 3, held | |
+| 7 | (0,6,0) | `끝이다.` | close A → `HALT` | 2δ − 3 = δ ⇒ **δ = 3**; flush `3` |
 
-This runs the body **once**, symbolically, and solves x = 2x − 3. If 수 had been known
-on entry (say 5), the same sentence would check an **invariant**: 7 ≠ 5, so `역설`.
+The body runs **once**, symbolically, and solves x = 2x − 3. Had 수 been known on entry
+(say 5), the same sentence would check an **invariant** instead: 7 ≠ 5, so `역설`.
+Replacing `처음은 끝이었다` with `끝은 처음이다` turns the relation back into a loop. That
+loop never exits, and the outcome is `한계 (STEP_LIMIT)`.
 
 ---
 
 ## 8. Keeping execution and solving apart
 
-The machine and the time engine share exactly five calls:
-
 ```ts
 interface Time {
   fresh(origin: "미정" | "다음" | "입력", at: Step): Unknown;
-  equate(a: Term, b: Term, why: Statement): void;         // may raise PARADOX
-  promise(plane: PlaneId, scene: number, noun: Noun, t: Term, why: Statement): void;
-  sceneEnded(plane: PlaneId, scene: number, store: Store): void; // discharges promises
+  equate(a: Term, b: Term, why: Statement): void;          // may raise PARADOX
+  promise(at: IterationRef | "run", noun: Noun, t: Term, why: Statement): void;
+  iterationEnded(at: IterationRef | "run", store: Store): void;  // discharges promises
   resolve(t: Term): { known: Value } | { pending: Unknown[] };
 }
 ```
 
-- **The machine** runs present-tense acts and calls `resolve` only in three places:
-  conditions, non-linear arithmetic, and output flushing.
-- A `pending` result in a **control position** stops the run with `UNRESOLVED`.
-  A pending result in output is held, and output flushes in order.
+- **The machine** runs present-tense acts and calls `resolve` only for conditions,
+  non-linear arithmetic, and output flushing. A pending result in a control position
+  stops the run with `UNRESOLVED`.
 - **The time engine** never moves the pointer, never writes the store, never
   backtracks, and never calls the machine.
-- **Determinism.** Program plus input gives exactly one trace and exactly one outcome.
-
-The only route from the future into control flow is the experimental future
-conditional (§9). Turning it on is a manifest flag, so a reader can tell from the
-file whether a program searches.
+- **Determinism.** Program plus input gives exactly one trace and one outcome.
 
 ---
 
 ## 9. Future-dependent branching (experimental)
 
 ```
-[결과가 0일 것이라면 남쪽을 본다.]
+[결과가 0일 것이라면 동쪽을 본다.]
 ```
 
 With `[experimental] future-branching = true`:
 
 - The machine forks the history at this cell. Branch **A** applies the act and adds
-  `결과@끝 = 0`. Branch **B** skips it and adds `결과@끝 ≠ 0`. That disequality is
-  the one place inequality enters.
-- Each branch runs to the end of the scene that holds the conditional, under the
-  same step limit.
-- If exactly one branch is consistent, the history continues on it. If none is,
-  the outcome is `PARADOX`. If both are, it's `AMBIGUOUS`.
-- Forks multiply, so `limits.future-forks` (default 8) bounds them.
+  `결과 = 0` at the iteration's end. Branch **B** skips it and adds `결과 ≠ 0`, the one
+  place an inequality enters.
+- If exactly one branch is consistent, execution continues on it. If none is, the
+  outcome is `PARADOX`; if both are, it's `AMBIGUOUS`.
+- Forks are bounded by `limits.future-forks` (default 8).
 
-```
-         ┌─ A: face 남 → path sets 결과 := 0   needs 결과 = 0  ✓
-start ───┤
-         └─ B: keep 동 → path sets 결과 := 0   needs 결과 ≠ 0  ✗
-```
-
-Here only A is consistent, so the history takes A. If B's path had set 결과 := 1,
-both branches would be consistent and the outcome would be `AMBIGUOUS`. A
-well-formed program makes exactly one branch consistent. This is search, and
-that's why it stays outside core.
+This is search, which is why it stays outside core.
 
 ---
 
 ## 10. Rules that prevent collapse
 
-These are the tests every proposed feature has to pass.
-
-1. **The tense rule.** Present executes; past and future constrain. A feature that
-   needs a present-tense relation, or a past-tense action, is rejected or redesigned.
-2. **No anonymous data.** Every value lives in a named noun, and particles assign
-   roles. *(This prevents an ordinary stack VM.)*
-3. **No coordinates in sentences.** Movement is relative (`본다`, `간다`) or by
-   floors (`층`). Loops are scenes. *(This prevents goto, and with it portals.)*
-4. **Time solves straight lines, never searches.** Core constraints are linear
-   equalities with no disjunction, no inequality and no quantifiers, and each
-   resolution is one trace line. *(This prevents a generic SMT frontend.)*
-5. **Space never waits for time.** Control flow on an unknown is `UNRESOLVED`, not a
-   hidden solve.
-6. **A fixed vocabulary budget.** The core has seven temporal words
-   (`이다 였다 일 것이다 처음 끝 전 다음`), ten verbs, and the copula. A new
-   capability must be a movement, a scene boundary or a tense — not a new verb
-   family.
-7. **Projection is never semantics, and inline ≡ reference.** If the formatter or
-   the IDE can change it, the parser never reads it.
+1. **The tense rule.** Present executes; past and future constrain.
+2. **No anonymous data.** Values live in named nouns, and particles assign roles.
+   *(This prevents a stack VM.)*
+3. **No coordinates in sentences.** Movement is relative, or by floors. Loops are
+   anchors. *(This prevents goto.)*
+4. **Time solves straight lines, never searches** (in core). *(This prevents SMT.)*
+5. **Space never waits for time.** Control flow on an unknown is `UNRESOLVED`.
+6. **A fixed vocabulary budget.** Seven temporal words (`이다 였다 일 것이다 처음 끝 전
+   다음`), ten verbs, and the copula. New capability must be a movement, a cycle
+   boundary or a tense.
+7. **Projection is never semantics, and inline ≡ reference.**
 
 ---
 
@@ -902,49 +818,45 @@ These are the tests every proposed feature has to pass.
 
 | Tier | Contents |
 |---|---|
-| **v2 core** | **Container and layout:** text `.y3` container, `unpack`/`pack`, manifest; `⟦ ⟧` / `[ ]` / `:ref:` / `※` grammar; rectangular planes; formatter with flat/perspective/strong projections. **Space:** 24 orientations; `본다`/`간다`/`층`; line wrap; scenes, `끝이다`, `끝은 처음이다`, `여기가 처음이다`. **Grammar:** nouns and particles with agreement; the 10 verbs; conditions (`이면`, `가 아니면`, `보다 크면/작으면`). **Time:** tense (`이다`, `미정이다`, `였다`, `일 것이다`); `처음의`/`끝의` anchors; `처음은 끝이었다`; channels (`다음에서 온다`, `전으로 보낸다`); linear solver; 소급/자기원인 provenance. **Results:** the seven outcomes with 진단 reports; trace with retro-fill. |
-| **Experimental** (manifest flags) | Future conditional `일 것이라면` (bounded forking); Novikov selection (a canonical choice among the solutions of an ambiguous bootstrap); past-tense verbs as transition assertions (`[값에 1을 더했다.]` ⇒ current = previous + 1); counterfactual `이었다면`; inequalities in past/future statements. |
-| **Future ideas** | Zip container and signed distribution; IDE projections (orthographic/top/side/exploded) and a time-scrubber that animates retro-fill; `.y4` recorded runs (space × time); **거울**: the 24 *improper* orientations (the other half of the 48) as the left-handed mirror self, "거울속의나는왼손잡이오"; **13인의아해**: concurrent pointers with deterministic scheduling; purist numeral mode ("사람은숫자를버리라"). |
+| **v2 core** | Text `.y3` document, `⟦ ⟧`/`[ ]`/`:ref:`/`※`, rectangular planes, VOID edges, formatter projections, `pack`/`unpack`; 24 orientations, `본다`/`간다`/`층`; anchor cycles (`여기가 처음이다`, `끝은 처음이다`, `끝이다`); nouns, particles, frames, orthography lint; `bigint`; tense (`이다`, `미정이다`, `였다`, `일 것이다`), `처음의`/`끝의`, `처음은 끝이었다`; channels; linear solver; provenance; seven outcomes with 진단 reports. |
+| **Experimental** (manifest flags) | Future conditional `일 것이라면`; Novikov selection for ambiguous bootstraps; past-tense verbs as transition assertions; counterfactual `이었다면`; inequalities in past/future statements. |
+| **Future ideas** | Explicit wrapped/toroidal topology; IDE projections (orthographic/top/side/exploded) and a time-scrubber; `.y4` recorded runs (space × time); **거울**, the 24 improper orientations as the left-handed mirror self; **13인의아해**, concurrent pointers; a Rust solver behind the same interface, for native and WebAssembly. |
 
 ---
 
 ## 12. Relation to earlier proposals
 
-- **From `design-review-v2.md`.** Kept: the bug list, the
-  shift-versus-flight fix (now `층`), and the static checker. Dropped: the
-  `@row`/`@mark`/label-jump ideas, which are made unnecessary by scenes and planes.
-- **From `v2-samchagak.md`.** Kept: Yi Sang as the source of names, 진단 reports,
-  rows read like text, and citing the poems. Dropped: the glyph register, the value
-  stack (箱), specimens and wings (replaced by scenes), and `光` rewind (replaced by
-  constraints). The mirror and the children move to future ideas, now with a
-  geometric footing.
+- **From `design-review-v2.md`:** the bug list, the shift-versus-flight fix (now `층`),
+  and static checking carry over. Label jumps do not, because cycles replace them.
+- **From `v2-samchagak.md`:** Yi Sang naming, 진단 reports, and citing the poems carry
+  over. The glyph register, value stack, wings, and `光` rewind are dropped. The mirror
+  and the children are future ideas.
 
 ## 13. Implementation plan
 
-Each milestone ends with this document's examples passing as golden tests
-(`tests/golden/*.y3` + `.out` + `.trace`).
+**Branches.** Design lives on `claude/brave-einstein-sv6mxm` and is merged to `main`
+first. Each milestone then gets a fresh branch from the updated `main`, starting with
+`v2/m0-space`.
 
-1. **M0 Container and syntax.** `container/`, `syntax/`, formatter projections, and
-   round-trip tests (fmt ∘ parse is stable; pack ∘ unpack = id).
-2. **M1 Korean.** 받침 and number readings, eojeol morphology, the frame table, and
-   agreement checks with fixes.
-3. **M2 Space.** The orientation group, movement, line wrap, scenes and flow, and
-   `VOID`/`HALT`/`STEP_LIMIT`. Example 1 passes.
-4. **M3 Time.** Terms, unknowns, the incremental solver, `였다` / `일 것이다` /
-   anchors / `처음은 끝이었다` / channels, provenance, and the remaining outcomes.
-   Examples 2–4 pass.
-5. **M4 Reports.** 진단, a trace with retro-fill, and `y3 check`.
-6. **M5 IDE.** Projections and the time-scrubber.
-7. **X Experimental.** Future branching behind a flag.
+| Milestone | Scope | Exit criteria |
+|---|---|---|
+| **M0 document** | single-file document model; `[ ]` cells; `⟦ ⟧` planes; inline planes; `:name:` refs; `※` section; rectangular validation; canonical formatting; projections; `pack`/`unpack`. **No sentence grammar, no runtime.** | `parse(format(parse(s))) = parse(s)` for every projection; `format` is idempotent; inline ≡ named (structural and semantic); `pack(unpack(s)) = format(s)` |
+| **M1 space** | 24-orientation group, movement, translation, VOID, step loop (driven by test stubs, not sentences) | orientation group laws; VOID cases |
+| **M2 present tense** | sentence morphology and frames, orthography lint, `bigint` values, present-tense acts, anchor cycles, `HALT`/`FAULT`/`STEP_LIMIT` | Example 1 runs |
+| **M3 past/future** | versions, unknowns, solver, `였다` / `일 것이다` / anchors, `UNRESOLVED` | Example 2 and its variants run |
+| **M4 temporal loops** | channels, `처음은 끝이었다`, provenance, `PARADOX` / `AMBIGUOUS` reporting | **the bootstrap trio and Example 4 run as conformance tests** |
+| **M5 IDE** | projections, debugger, time-scrubber | — |
+
+The bootstrap trio and the other examples are checked in at M0 under
+`tests/conformance/` with their expected outcomes. M0 parses and round-trips them, and
+their execution tests are marked `todo` until M2–M4 enable them.
 
 ## 14. Open questions
 
-1. Should the **default 처음 of a never-entered plane** be `(0,0)` facing `동`, or should
-   flowing in always reset to that, even after a spatial visit set the plane's 처음
-   elsewhere?
-2. Should **flow at a scene's end** always go to z+1, or should the manifest allow a
-   different reading order of the volume (e.g. a building read top-down)?
-3. **Output as lines.** Should `말한다` always end a line (the current proposal), or
-   should there be a second verb for inline output?
-4. Should **agreement errors** be hard errors (proposed) or warnings with an
-   auto-fix?
+1. **Output lines.** Should `말한다` always end a line (current proposal), or should a
+   second verb print inline?
+2. **Default facing 남.** This follows from D2: with no wrap, a column of sentences
+   facing 동 would hit the void after one cell. Does 남 match your intuition, or should
+   the manifest's `start.facing` be mandatory?
+3. **Lint severity.** Should non-canonical orthography be a warning (proposed) or an
+   info-level hint?
