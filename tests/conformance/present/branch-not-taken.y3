@@ -1,0 +1,7 @@
+# A conditional that does not take its spatial branch. Facing 남, left is 동.
+⟦
+[값은 3이다.]             [ ]              [ ]
+[값이 2이면 왼쪽을 본다.] ["둘"을 말한다.] [끝이다.]
+["다른 수"를 말한다.]     [ ]              [ ]
+[끝이다.]                 [ ]              [ ]
+⟧

@@ -27,6 +27,8 @@ function describeInstruction(instruction: Instruction): string {
       return `step ${instruction.relative}`;
     case "floor":
       return `floor ${instruction.delta > 0 ? "up" : "down"}`;
+    case "jump":
+      return `jump (${instruction.to.position.x},${instruction.to.position.y},${instruction.to.position.z})`;
     case "end":
       return "end";
   }

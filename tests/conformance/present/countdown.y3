@@ -1,0 +1,9 @@
+# An anchor-based loop: the back-edge is taken until the condition fails.
+⟦
+[값은 3이다.]
+[여기가 처음이다.]
+[값을 말한다.]
+[값에서 1을 뺀다.]
+[값이 0이 아니면 끝은 처음이다.]
+[끝이다.]
+⟧

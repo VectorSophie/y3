@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { hasErrors, loadDocument } from "../../src/v2";
+import { compileProgram, formatProgramTrace, hasErrors, loadDocument, runProgram } from "../../src/v2";
 import { readRepoFile } from "./helpers";
 
-// The conformance set: programs with known results. M0 can only check that each one is
-// a valid document; each run turns into a real test when its milestone lands.
+// The conformance set: programs with known results. A fixture runs once its milestone
+// is implemented: its outcome, output, step count and (when given) its golden trace
+// must match exactly. Fixtures for later milestones must still load, and must be
+// refused by the compiler only because they use what a later milestone adds.
+
+const IMPLEMENTED = new Set(["M2"]);
 
 type Expectation = {
   path: string;
@@ -11,25 +15,53 @@ type Expectation = {
   status: string;
   output: string[];
   steps: number;
+  trace?: string;
 };
 
 const { fixtures } = JSON.parse(readRepoFile("tests/conformance/expected.json")) as { fixtures: Expectation[] };
 
 describe("conformance fixtures", () => {
-  it("includes the bootstrap trio", () => {
-    const statuses = fixtures.filter((fixture) => fixture.path.includes("/temporal/bootstrap-")).map((fixture) => fixture.status);
-    expect(statuses.sort()).toEqual(["AMBIGUOUS", "HALT", "PARADOX"]);
+  it("includes the bootstrap trio, still waiting for M4", () => {
+    const trio = fixtures.filter((fixture) => fixture.path.includes("/temporal/bootstrap-"));
+    expect(trio.map((fixture) => fixture.status).sort()).toEqual(["AMBIGUOUS", "HALT", "PARADOX"]);
+    expect(trio.every((fixture) => fixture.milestone === "M4")).toBe(true);
   });
 
   for (const fixture of fixtures) {
     describe(fixture.path, () => {
-      it("is a valid M0 document", () => {
-        const loaded = loadDocument(readRepoFile(fixture.path));
+      const loaded = loadDocument(readRepoFile(fixture.path));
+
+      it("is a valid document", () => {
         expect(hasErrors(loaded.diagnostics)).toBe(false);
         expect(loaded.space?.layers.length).toBeGreaterThan(0);
       });
 
-      it.todo(`runs to ${fixture.status} with output [${fixture.output.join(", ")}] in ${fixture.steps} steps (${fixture.milestone})`);
+      if (!IMPLEMENTED.has(fixture.milestone)) {
+        it(`is refused until ${fixture.milestone}, only for temporal features`, () => {
+          if (!loaded.ast || !loaded.space) throw new Error("expected a document");
+          const compiled = compileProgram(loaded.ast, loaded.space);
+          expect(compiled.program).toBeNull();
+          const codes = compiled.diagnostics.filter((d) => d.severity === "error").map((d) => d.code);
+          expect(codes.length).toBeGreaterThan(0);
+          expect(codes.every((code) => code.startsWith("Y3T")), codes.join(", ")).toBe(true);
+        });
+        it.todo(`runs to ${fixture.status} with output [${fixture.output.join(", ")}] in ${fixture.steps} steps (${fixture.milestone})`);
+        return;
+      }
+
+      it(`runs to ${fixture.status} with output [${fixture.output.join(", ")}] in ${fixture.steps} steps`, () => {
+        if (!loaded.ast || !loaded.space || !loaded.manifest) throw new Error("expected a document");
+        const compiled = compileProgram(loaded.ast, loaded.space);
+        expect(compiled.diagnostics).toEqual([]);
+        if (!compiled.program) throw new Error("expected a program");
+        const result = runProgram(compiled.program, loaded.manifest);
+        expect(result.outcome.status).toBe(fixture.status);
+        expect(result.output).toEqual(fixture.output);
+        expect(result.outcome.steps).toBe(fixture.steps);
+        if (fixture.trace) {
+          expect(formatProgramTrace(result)).toBe(readRepoFile(fixture.trace));
+        }
+      });
     });
   }
 });
