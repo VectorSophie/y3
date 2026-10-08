@@ -12,6 +12,8 @@ function operand(expr: Expr): Operand {
       return { kind: "literal", value: { kind: "text", value: expr.value } };
     case "noun":
       return { kind: "name", name: expr.name };
+    case "anchored":
+      return { kind: "anchored", anchor: expr.anchor === "처음" ? "start" : "end", name: expr.name };
   }
 }
 
@@ -27,6 +29,10 @@ function lowerAct(act: Exclude<ActAst, { kind: "anchor" }>): Act {
       return { op: "subtract", name: act.noun, amount: operand(act.amount) };
     case "say":
       return { op: "say", value: operand(act.value) };
+    case "receive":
+      return { op: "receive", name: act.noun };
+    case "send":
+      return { op: "send", name: act.noun };
     case "turn":
       return { op: "move", instruction: { op: "turn", turn: act.turn } };
     case "face":
@@ -47,9 +53,12 @@ export function lower(sentence: SentenceAst): Operation {
     case "anchor":
       return { op: "anchor" };
     case "assert":
-      return { op: "assert", name: sentence.noun, value: operand(sentence.value) };
+      return { op: "assert", name: sentence.noun, at: sentence.anchor === "처음" ? "start" : "now", value: operand(sentence.value) };
     case "promise":
+      // 끝의 N은 E일 것이다 and N은 E일 것이다 both speak of the end of the iteration.
       return { op: "promise", name: sentence.noun, value: operand(sentence.value) };
+    case "fixed":
+      return { op: "fixed" };
     case "when":
       if (sentence.then.kind === "anchor") {
         throw new Error("an anchor cannot be conditional"); // the parser rejects this
@@ -68,7 +77,7 @@ export function lower(sentence: SentenceAst): Operation {
 // only when it is introduced: assigned in the present, or declared 미정. Reading it, or
 // constraining it in the past or future, needs it to be introduced somewhere.
 export function namesIn(operation: Operation): { uses: string[]; introduces: string[] } {
-  const read = (o: Operand) => (o.kind === "name" ? [o.name] : []);
+  const read = (o: Operand) => (o.kind === "literal" ? [] : [o.name]);
   switch (operation.op) {
     case "assign":
       return { uses: read(operation.value), introduces: [operation.name] };
@@ -79,6 +88,10 @@ export function namesIn(operation: Operation): { uses: string[]; introduces: str
       return { uses: [operation.name, ...read(operation.amount)], introduces: [operation.name] };
     case "say":
       return { uses: read(operation.value), introduces: [] };
+    case "receive":
+      return { uses: [], introduces: [operation.name] };
+    case "send":
+      return { uses: [operation.name], introduces: [] };
     case "assert":
     case "promise":
       return { uses: [operation.name, ...read(operation.value)], introduces: [] };

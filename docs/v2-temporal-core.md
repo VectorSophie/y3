@@ -50,26 +50,36 @@ unbound ──이다 / 더한다…──▶ present-assigned (concrete)
 
 An open symbol that never reaches the output is harmless.
 
-## What the solver does and doesn't do
+## The solver model
 
-It adds linear equalities over the integers, incrementally, and reports consistency and
-newly determined symbols. A system with one equation in two unknowns resolves neither.
-It never picks a value, never searches, and never chooses a branch. A condition on an
-open symbol is `UNRESOLVED`, even `α = α`.
+Every temporal constraint in Y3 (past statements, promises, and from M4 also channels,
+fixed points and time anchors) becomes one linear equation over symbols. Together they
+form one system
 
-**Integer solvability is exact, for the whole system.** A per-equation test (the gcd of
-the coefficients divides the constant) is necessary but not sufficient. For example,
-3x + 3y + 2z = −4 and 3x + z = −4 each pass it, but together force z ≡ 1 and z ≡ 2
-(mod 3). After each new equation the solver brings the whole system to column Hermite
-form, using unimodular column operations in `bigint`, and solves it by forward
-substitution. An integer solution exists exactly when every step divides evenly.
+```
+A x = b        A an integer matrix, b an integer vector, x the symbols, over ℤ
+```
 
-Determination then needs no search. Once the system has integer solutions, a symbol
-that is unique over the rationals is unique over the integers, because any rational
-direction of freedom scales to an integer one. That separates the outcomes exactly:
+which the solver treats in exactly three parts.
 
-- **No integer solution:** `PARADOX` (reported as "no integer solution" for the
-  equation alone, or "… together with the earlier constraints").
+1. **Exact whole-system integer feasibility.** After each new equation, the whole system
+   is brought to column Hermite form with unimodular column operations in `bigint`, and
+   solved by forward substitution. An integer solution exists exactly when every step
+   divides evenly. Checking each equation alone (the gcd of its coefficients divides its
+   constant) is necessary but not sufficient. 3x + 3y + 2z = −4 and 3x + z = −4 each
+   pass that check, but together force z ≡ 1 and z ≡ 2 (mod 3).
+2. **Rational elimination for determination.** Fraction-free Gaussian elimination keeps
+   the equations in reduced form. A symbol is determined when its row mentions nothing
+   else.
+3. **Unique over ℚ, plus integer-feasible, means unique over ℤ.** If the system has an
+   integer solution, any rational direction of freedom scales to an integer one. So a
+   symbol that is unique over the rationals is unique over the integers, and no search
+   is needed.
+
+That gives exactly three answers:
+
+- **No integer solution:** `PARADOX` ("no integer solution" for the equation alone, or
+  "… together with the earlier constraints").
 - **Integer solutions, and a symbol pinned down:** resolved.
 - **Integer solutions, but a symbol left open:** it stays open, and output that depends
   on it is `AMBIGUOUS`.
@@ -77,14 +87,27 @@ direction of freedom scales to an integer one. That separates the outcomes exact
 `temporal/integer-paradox.y3` and `temporal/integer-ambiguous.y3` show the two sides at
 the language level.
 
-## Not yet (M4)
+### What the solver is not
 
-These are refused with `Y3T001`/`Y3T002`:
-- the fixed point `처음은 끝이었다`
-- time anchors `처음의` and `끝의`
-- channels `다음에서 온다` and `전으로 보낸다`
+This boundary is part of the design, not a gap to fill later.
 
-The bootstrap trio waits for channels.
+- **No choosing.** It never picks a value the equations leave open. A canonical or
+  arbitrary choice ("Novikov selection") is out of scope.
+- **No branching.** It never decides control flow: a condition on an open symbol is
+  `UNRESOLVED`, even `α = α`.
+- **Nothing beyond linear equalities.** There are no inequalities, no nonlinear terms
+  (an unknown times an unknown), and no disjunction or search.
+- **No second model.** New temporal features (M4's cycles included) must be expressible
+  as more equations in the same `A x = b`.
 
-Also not planned: future-dependent branches `일 것이라면`, a canonical choice among
-several solutions, inequalities, and nonlinear terms.
+Text symbols are handled outside the matrix by unification. They take part only in
+equations with text or with themselves.
+
+## Later milestones
+
+Temporal cycles (M4) are described in `v2-temporal-cycles.md`. They add channels
+(`다음에서 온다`, `전으로 보낸다`), the fixed point `처음은 끝이었다`, and the time anchors
+`처음의` and `끝의`, all as equations in the same system.
+
+Not planned: future-dependent branches `일 것이라면`, a canonical choice among several
+solutions, inequalities, and nonlinear terms.

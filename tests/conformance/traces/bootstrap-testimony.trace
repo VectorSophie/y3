@@ -1,0 +1,17 @@
+1 (0,0,0) 남/위 [문장이 다음에서 온다.] → (0,1,0) 남/위
+  channel S1 opens: 문장 := β1  [다음에서 온다]
+2 (0,1,0) 남/위 [문장을 말한다.] → (0,2,0) 남/위
+  out β1  [held]
+3 (0,2,0) 남/위 [위층으로 간다.] → (0,2,1) 남/위
+4 (0,2,1) 남/위 [문장을 전으로 보낸다.] → (0,3,1) 남/위
+  channel S1 closes: β1 back to t1  [closes on itself]
+  constraint β1 = β1  [channel S1]
+5 (0,3,1) 남/위 [문장은 "날자"였다.] → (0,4,1) 남/위
+  constraint β1 = "날자"  [past]
+  self-caused β1 = "날자"  [S1 closed on itself; no literal or input]
+  out "날자"  [held since t2]
+6 (0,4,1) 남/위 [끝이다.] → (0,4,1) 남/위
+  end
+진단: 정지 (HALT) · 6보 · ended at (0,4,1)
+symbols:
+  β1 (문장, born t1) = 날자 at t5 [self-caused]

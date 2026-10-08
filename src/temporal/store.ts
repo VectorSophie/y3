@@ -9,10 +9,19 @@ import { combine, formatTerm, substitute, symbol, symbolsOf, toLinear, TermError
 
 export type SymbolState = "declared" | "constrained" | "resolved";
 
+// Where a symbol came from: 미정 (declared), a channel from later (다음), or a value read
+// from the end of the iteration (끝의 N).
+export type SymbolOrigin = "미정" | "다음" | "끝";
+const PREFIX: Readonly<Record<SymbolOrigin, string>> = { 미정: "α", 다음: "β", 끝: "ε" };
+
 export type SymbolInfo = {
   readonly id: SymbolId;
-  readonly label: string; // α1, α2, …
+  readonly label: string; // α1 (미정), β2 (channel), ε3 (끝의 N)
   readonly noun: string; // the noun that declared it
+  readonly origin: SymbolOrigin;
+  // Set when the symbol's own cycle closed on itself: what came back to it was built
+  // from it with no present-tense literal or input. A resolved self-loop is self-caused.
+  selfLoop: string | null;
   readonly born: number; // step
   sort: "unknown" | "int" | "text"; // fixed by arithmetic or by an equation; says nothing about the value
   constrained: boolean; // some equation has mentioned it
@@ -35,12 +44,14 @@ export class TemporalStore {
   private readonly symbols: SymbolInfo[] = [];
   private readonly system = new LinearSystem();
 
-  declare(noun: string, step: number): SymbolicTerm {
+  declare(noun: string, step: number, origin: SymbolOrigin = "미정"): SymbolicTerm {
     const id = this.symbols.length + 1;
     this.symbols.push({
       id,
-      label: `α${id}`,
+      label: `${PREFIX[origin]}${id}`,
       noun,
+      origin,
+      selfLoop: null,
       born: step,
       sort: "unknown",
       constrained: false,
@@ -130,6 +141,13 @@ export class TemporalStore {
       }
       info.sort = "text";
       return { kind: "consistent", resolutions: [this.settle(info, text.kind === "literal" ? text.value : { kind: "text", value: "" }, step)] };
+    }
+
+    // An identity (β = β) holds for any value of any sort; it constrains nothing.
+    const identical = JSON.stringify(left, (_, v) => (typeof v === "bigint" ? v.toString() : v instanceof Map ? [...v] : v)) ===
+      JSON.stringify(right, (_, v) => (typeof v === "bigint" ? v.toString() : v instanceof Map ? [...v] : v));
+    if (identical) {
+      return { kind: "consistent", resolutions: [] };
     }
 
     const ids = [...symbolsOf(left), ...symbolsOf(right)];

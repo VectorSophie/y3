@@ -8,7 +8,12 @@ import type { Instruction } from "../runtime/instructions";
 // temporal terms live in temporal/ and are never folded into this type.
 export type ConcreteValue = { readonly kind: "int"; readonly value: bigint } | { readonly kind: "text"; readonly value: string };
 
-export type Operand = { readonly kind: "literal"; readonly value: ConcreteValue } | { readonly kind: "name"; readonly name: string };
+export type Moment = "start" | "end"; // 처음, 끝 of the innermost iteration (or the run)
+
+export type Operand =
+  | { readonly kind: "literal"; readonly value: ConcreteValue }
+  | { readonly kind: "name"; readonly name: string }
+  | { readonly kind: "anchored"; readonly anchor: Moment; readonly name: string }; // a name's value at 처음 or 끝
 
 export type Test = { readonly left: Operand; readonly right: Operand; readonly negated: boolean };
 
@@ -18,16 +23,19 @@ export type Operation =
   | { readonly op: "add"; readonly name: string; readonly amount: Operand }
   | { readonly op: "subtract"; readonly name: string; readonly amount: Operand }
   | { readonly op: "say"; readonly value: Operand }
+  | { readonly op: "receive"; readonly name: string } // opens a channel: the name takes a value from later
+  | { readonly op: "send"; readonly name: string } // closes the name's most recent channel
   | { readonly op: "move"; readonly instruction: Exclude<Instruction, { op: "end" } | { op: "jump" } | { op: "nop" }> }
   | { readonly op: "anchor" }
   | { readonly op: "back" }
   | { readonly op: "end" }
   | { readonly op: "when"; readonly test: Test; readonly then: Act }
   // Relations (past and future tense): they add constraints and never write or move.
-  | { readonly op: "assert"; readonly name: string; readonly value: Operand } // the name's current value is this
-  | { readonly op: "promise"; readonly name: string; readonly value: Operand }; // the name will be this when the iteration (or run) ends
+  | { readonly op: "assert"; readonly name: string; readonly at: "now" | "start"; readonly value: Operand } // the name was this (now, or at 처음)
+  | { readonly op: "promise"; readonly name: string; readonly value: Operand } // the name will be this when the iteration (or run) ends
+  | { readonly op: "fixed" }; // 처음은 끝이었다: what the iteration wrote ends as it began
 
-export type Relation = Extract<Operation, { op: "assert" } | { op: "promise" }>;
+export type Relation = Extract<Operation, { op: "assert" } | { op: "promise" } | { op: "fixed" }>;
 export type Act = Exclude<Operation, Relation | { op: "when" } | { op: "anchor" }>;
 
 export function renderValue(value: ConcreteValue): string {

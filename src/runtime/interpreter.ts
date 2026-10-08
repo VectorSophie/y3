@@ -2,7 +2,7 @@ import type { Coordinate, Manifest, Pose } from "../space/manifest";
 import { coordinateKey, type CompiledProgram } from "../semantics/program";
 import { renderValue, sameValue, type Act, type ConcreteValue, type Operand, type Operation } from "../semantics/operations";
 import { TemporalStore, type Resolution, type SymbolInfo } from "../temporal/store";
-import { literal, TermError, type SymbolicTerm } from "../temporal/terms";
+import { literal, symbolsOf, TermError, type SymbolicTerm, type SymbolId } from "../temporal/terms";
 import type { DecodeResult, Instruction } from "./instructions";
 import { createMachine, step } from "./machine";
 import type { ProgramOutcome, TemporalStatus } from "./program-outcome";
@@ -10,14 +10,36 @@ import type { TraceEntry } from "./trace";
 
 // The interpreter. Present tense executes on concrete values (M2). Past and future
 // tense add constraints to the temporal store, which resolves a symbol only when the
-// constraints leave exactly one value (M3). The interpreter never sees Korean, the
-// machine never sees values, and the store never decides control flow.
+// constraints leave exactly one value (M3). Temporal cycles (M4): channels carry a
+// value from later to earlier, fixed points equate an iteration's end with its start,
+// and time anchors read a name at 처음 or 끝 — all as linear equalities for the same
+// solver. The interpreter never sees Korean, the machine never sees values, and the
+// store never decides control flow.
 
-// A noun's current binding. A name with no binding is unbound.
-type Binding = { readonly kind: "concrete"; readonly value: ConcreteValue } | { readonly kind: "symbolic"; readonly term: SymbolicTerm };
+// A noun's current binding. A name with no binding is unbound. `caused` records whether
+// any present-tense literal (or input) went into a symbolic value; a value built only
+// from symbols has no cause of its own.
+type Binding =
+  | { readonly kind: "concrete"; readonly value: ConcreteValue }
+  | { readonly kind: "symbolic"; readonly term: SymbolicTerm; readonly caused: boolean };
 
 type Promise = { readonly name: string; readonly term: SymbolicTerm; readonly madeAt: number; readonly sentence: string };
-type Cycle = { anchor: Pose; iteration: number; promises: Promise[] };
+type EndRead = { readonly name: string; readonly symbol: SymbolicTerm; readonly id: SymbolId; readonly madeAt: number; readonly sentence: string };
+type FixedPoint = { readonly madeAt: number; readonly sentence: string };
+
+// One iteration of a loop, or the whole run. It remembers how it began, what it wrote,
+// and what must be closed when it ends.
+type Scope = {
+  readonly anchor: Pose | null; // null for the run
+  iteration: number;
+  start: Map<string, Binding>; // 처음: the bindings when this iteration began
+  written: Set<string>;
+  promises: Promise[];
+  endReads: EndRead[]; // 끝의 N, read before the end
+  fixed: FixedPoint[]; // 처음은 끝이었다
+};
+
+type Slot = { readonly id: string; readonly name: string; readonly symbol: SymbolicTerm; readonly symbolId: SymbolId; readonly openedAt: number };
 type Line = { text: string | null; term: SymbolicTerm | null; heldSince: number | null };
 
 export type Effect =
@@ -33,11 +55,24 @@ export type Effect =
   | { readonly kind: "declare"; readonly name: string; readonly symbol: string }
   | { readonly kind: "bind"; readonly name: string; readonly term: string }
   | { readonly kind: "hold"; readonly term: string }
+  // temporal cycles
+  | { readonly kind: "open"; readonly slot: string; readonly name: string; readonly symbol: string }
+  | { readonly kind: "close"; readonly slot: string; readonly sent: string; readonly openedAt: number; readonly selfLoop: boolean }
+  | { readonly kind: "unanswered"; readonly slot: string; readonly symbol: string }
+  | { readonly kind: "endread"; readonly name: string; readonly symbol: string; readonly due: string }
+  | { readonly kind: "fixed"; readonly due: string }
   // constraints
-  | { readonly kind: "constrain"; readonly equation: string; readonly tense: "past" | "future"; readonly promisedAt: number | null }
+  | { readonly kind: "constrain"; readonly equation: string; readonly source: string }
   | { readonly kind: "promise"; readonly name: string; readonly term: string; readonly due: string }
   // resolution
-  | { readonly kind: "resolve"; readonly symbol: string; readonly value: ConcreteValue; readonly born: number; readonly fills: readonly number[] }
+  | {
+      readonly kind: "resolve";
+      readonly symbol: string;
+      readonly value: ConcreteValue;
+      readonly born: number;
+      readonly fills: readonly number[];
+      readonly selfLoop: string | null;
+    }
   | { readonly kind: "flush"; readonly line: string; readonly heldSince: number }
   // how time can stop a run
   | { readonly kind: "contradiction"; readonly reason: string }
@@ -53,7 +88,8 @@ export type SymbolSummary = {
   readonly state: "declared" | "constrained" | "resolved";
   readonly value: string | null;
   readonly resolvedAt: number | null;
-  readonly mark: "RETRO" | null;
+  readonly loop: string | null; // the cycle that closed on this symbol, if any
+  readonly mark: "SELF_CAUSED" | "RETRO" | null;
 };
 
 export type ProgramResult = {
@@ -70,12 +106,18 @@ function sameCoordinate(a: Coordinate, b: Coordinate): boolean {
   return a.x === b.x && a.y === b.y && a.z === b.z;
 }
 
+function at(c: Coordinate): string {
+  return `(${c.x},${c.y},${c.z})`;
+}
+
 export function runProgram(program: CompiledProgram, manifest: Manifest, options: { maxSteps?: number } = {}): ProgramResult {
   const store = new TemporalStore();
   const bindings = new Map<string, Binding>();
   const lines: Line[] = [];
-  const cycles: Cycle[] = [];
-  const runPromises: Promise[] = [];
+  const run: Scope = { anchor: null, iteration: 1, start: new Map(), written: new Set(), promises: [], endReads: [], fixed: [] };
+  const cycles: Scope[] = [];
+  const slots = new Map<string, Slot[]>(); // per name, most recent last
+  let slotCount = 0;
   let effects: Effect[] = [];
   let now = 0; // the step being executed
   let sentence = "";
@@ -85,6 +127,9 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     if (!stop) stop = { status, message };
   };
 
+  const scope = (): Scope => cycles[cycles.length - 1] ?? run;
+  const dueLabel = (s: Scope) => (s.anchor ? `end of 처음 ${at(s.anchor.position)} #${s.iteration}` : "end of run");
+
   // A binding, made concrete whenever the store can justify it.
   const settle = (binding: Binding): Binding => {
     if (binding.kind === "concrete") return binding;
@@ -92,6 +137,7 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     return value ? { kind: "concrete", value } : binding;
   };
   const termOf = (binding: Binding): SymbolicTerm => (binding.kind === "concrete" ? literal(binding.value) : binding.term);
+  const caused = (binding: Binding): boolean => binding.kind === "concrete" || binding.caused;
   const pendingLabels = (term: SymbolicTerm) => store.pending(term).map((info) => info.label);
 
   // A name's binding as recorded, keeping its symbolic identity even when resolved.
@@ -101,11 +147,48 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     return binding;
   };
   const bound = (name: string): Binding => settle(recorded(name));
-  const read = (operand: Operand): Binding => (operand.kind === "literal" ? { kind: "concrete", value: operand.value } : bound(operand.name));
+
+  const atStart = (name: string): Binding => {
+    const current = scope();
+    if (!current.anchor) throw new RuntimeFault(`'처음의 ${name}' needs an open '여기가 처음이다'`);
+    const binding = current.start.get(name);
+    if (!binding) throw new RuntimeFault(`'${name}' had no value at 처음 ${at(current.anchor.position)}`);
+    return binding;
+  };
+
+  // 끝의 N: a value from the end of the iteration, carried back as a fresh symbol that
+  // the end will settle.
+  const fromEnd = (name: string): Binding => {
+    const current = scope();
+    const symbol = store.declare(name, now, "끝");
+    const id = symbolsOf(symbol)[0] as SymbolId;
+    current.endReads.push({ name, symbol, id, madeAt: now, sentence });
+    effects.push({ kind: "endread", name, symbol: store.format(symbol), due: dueLabel(current) });
+    return { kind: "symbolic", term: symbol, caused: false };
+  };
+
+  const read = (operand: Operand): Binding => {
+    switch (operand.kind) {
+      case "literal":
+        return { kind: "concrete", value: operand.value };
+      case "name":
+        return bound(operand.name);
+      case "anchored":
+        return operand.anchor === "start" ? settle(atStart(operand.name)) : fromEnd(operand.name);
+    }
+  };
+  // Like read, but a name keeps its symbolic identity, so constraints say what they are about.
+  const readRecorded = (operand: Operand): Binding => (operand.kind === "name" ? recorded(operand.name) : read(operand));
+
+  const markWritten = (name: string) => {
+    run.written.add(name);
+    for (const cycle of cycles) cycle.written.add(name);
+  };
 
   const assign = (name: string, binding: Binding) => {
     const settled = settle(binding);
     bindings.set(name, settled);
+    markWritten(name);
     if (settled.kind === "concrete") {
       effects.push({ kind: "set", name, value: settled.value });
     } else {
@@ -132,45 +215,68 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
         value: resolution.value,
         born: resolution.symbol.born,
         fills: resolution.fills,
+        selfLoop: resolution.symbol.selfLoop,
       });
     }
     if (resolutions.length > 0) flushHeld();
   };
 
   // Adds left = right as a constraint and reports what it settles.
-  const constrain = (left: SymbolicTerm, right: SymbolicTerm, tense: "past" | "future", promisedAt: number | null, source: string) => {
-    effects.push({ kind: "constrain", equation: `${store.format(left)} = ${store.format(right)}`, tense, promisedAt });
+  const constrain = (left: SymbolicTerm, right: SymbolicTerm, source: string, statement: string) => {
+    effects.push({ kind: "constrain", equation: `${store.format(left)} = ${store.format(right)}`, source });
     const result = store.equate(left, right, now);
     if (result.kind === "contradiction") {
       effects.push({ kind: "contradiction", reason: result.reason });
-      halt("PARADOX", `[${source}] cannot hold: ${result.reason}`);
+      halt("PARADOX", `[${statement}] cannot hold: ${result.reason}`);
       return;
     }
     recordResolutions(result.resolutions);
   };
 
-  const dueLabel = () => {
-    const cycle = cycles[cycles.length - 1];
-    if (!cycle) return "end of run";
-    const { x, y, z } = cycle.anchor.position;
-    return `end of 처음 (${x},${y},${z}) #${cycle.iteration}`;
+  // A symbol whose own cycle returns something built only from it closes on itself.
+  const noteLoop = (id: SymbolId, returned: Binding, loop: string): boolean => {
+    if (returned.kind !== "symbolic" || returned.caused || !symbolsOf(returned.term).includes(id)) return false;
+    store.info(id).selfLoop = loop;
+    return true;
   };
 
-  const discharge = (promises: Promise[]) => {
-    for (const promise of promises.splice(0)) {
+  // Everything that falls due when an iteration (or the run) ends.
+  const endIteration = (ending: Scope) => {
+    for (const promise of ending.promises.splice(0)) {
       if (stop) return;
       const binding = bindings.get(promise.name);
       if (!binding) throw new RuntimeFault(`'${promise.name}' was promised a value but has none when the promise falls due`);
-      constrain(termOf(binding), promise.term, "future", promise.madeAt, promise.sentence);
+      constrain(termOf(binding), promise.term, `promised at t${promise.madeAt}`, promise.sentence);
     }
+    for (const read of ending.endReads.splice(0)) {
+      if (stop) return;
+      const binding = bindings.get(read.name);
+      if (!binding) throw new RuntimeFault(`'끝의 ${read.name}' was read, but '${read.name}' has no value at the end`);
+      noteLoop(read.id, binding, `끝의 ${read.name}`);
+      constrain(read.symbol, termOf(binding), `끝의 ${read.name} from t${read.madeAt}`, read.sentence);
+    }
+    for (const fixed of ending.fixed.splice(0)) {
+      for (const name of [...ending.written].sort()) {
+        if (stop) return;
+        const before = ending.start.get(name);
+        const after = bindings.get(name);
+        if (!before || !after || before === after) continue; // introduced during the iteration, or untouched
+        constrain(termOf(before), termOf(after), `처음은 끝이었다 at t${fixed.madeAt}`, fixed.sentence);
+      }
+    }
+  };
+
+  const beginIteration = (current: Scope) => {
+    current.start = new Map(bindings);
+    current.written = new Set();
   };
 
   const leaveInnermost = () => {
     const cycle = cycles[cycles.length - 1];
     if (!cycle) return;
-    discharge(cycle.promises);
+    endIteration(cycle);
     cycles.pop();
-    effects.push({ kind: "leave", anchor: cycle.anchor.position });
+    effects.push({ kind: "leave", anchor: (cycle.anchor as Pose).position });
   };
 
   const forward: Instruction = { op: "nop" };
@@ -185,7 +291,8 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
       return;
     }
     try {
-      assign(name, { kind: "symbolic", term: store.arithmetic(termOf(left), termOf(right), sign) });
+      const term = store.arithmetic(termOf(left), termOf(right), sign);
+      assign(name, { kind: "symbolic", term, caused: caused(left) || caused(right) });
     } catch (error) {
       if (error instanceof TermError) throw new RuntimeFault(error.message);
       throw error;
@@ -199,7 +306,8 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
         return forward;
       case "declare": {
         const term = store.declare(operation.name, now);
-        bindings.set(operation.name, { kind: "symbolic", term });
+        bindings.set(operation.name, { kind: "symbolic", term, caused: false });
+        markWritten(operation.name);
         effects.push({ kind: "declare", name: operation.name, symbol: store.format(term) });
         return forward;
       }
@@ -223,18 +331,46 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
         }
         return forward;
       }
+      case "receive": {
+        // A channel opens: the name takes a value that something later will send back.
+        const symbol = store.declare(operation.name, now, "다음");
+        const id = symbolsOf(symbol)[0] as SymbolId;
+        slotCount += 1;
+        const slot: Slot = { id: `S${slotCount}`, name: operation.name, symbol, symbolId: id, openedAt: now };
+        slots.set(operation.name, [...(slots.get(operation.name) ?? []), slot]);
+        bindings.set(operation.name, { kind: "symbolic", term: symbol, caused: false });
+        markWritten(operation.name);
+        effects.push({ kind: "open", slot: slot.id, name: operation.name, symbol: store.format(symbol) });
+        return forward;
+      }
+      case "send": {
+        const slot = slots.get(operation.name)?.pop();
+        const sent = recorded(operation.name);
+        if (!slot) {
+          effects.push({ kind: "contradiction", reason: `nothing earlier is waiting for '${operation.name}'` });
+          halt("PARADOX", `[${sentence}] cannot hold: no past is listening for '${operation.name}'`);
+          return forward;
+        }
+        const selfLoop = noteLoop(slot.symbolId, sent, slot.id);
+        effects.push({ kind: "close", slot: slot.id, sent: store.format(termOf(sent)), openedAt: slot.openedAt, selfLoop });
+        constrain(slot.symbol, termOf(sent), `channel ${slot.id}`, sentence);
+        return forward;
+      }
       case "move":
         return operation.instruction;
       case "anchor": {
-        const open = cycles.findIndex((cycle) => sameCoordinate(cycle.anchor.position, pose.position));
+        const open = cycles.findIndex((cycle) => cycle.anchor && sameCoordinate(cycle.anchor.position, pose.position));
         if (open >= 0) {
           while (cycles.length > open + 1) leaveInnermost();
-          const cycle = cycles[open] as Cycle;
-          discharge(cycle.promises); // reached again without a back-edge: the iteration ended here
+          const cycle = cycles[open] as Scope;
+          endIteration(cycle); // reached again without a back-edge: the iteration ended here
           cycle.iteration += 1;
+          beginIteration(cycle);
           effects.push({ kind: "anchor", at: pose.position, iteration: cycle.iteration });
         } else {
-          cycles.push({ anchor: pose, iteration: 1, promises: [] });
+          const cycle: Scope = { anchor: pose, iteration: 1, start: new Map(), written: new Set(), promises: [], endReads: [], fixed: [] };
+          beginIteration(cycle);
+          cycles.push(cycle);
           effects.push({ kind: "anchor", at: pose.position, iteration: 1 });
         }
         return forward;
@@ -242,17 +378,20 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
       case "back": {
         const cycle = cycles[cycles.length - 1];
         if (!cycle) throw new RuntimeFault("'끝은 처음이다' with no open '여기가 처음이다' to return to");
-        discharge(cycle.promises);
-        effects.push({ kind: "back", to: cycle.anchor.position });
-        return { op: "jump", to: cycle.anchor };
+        endIteration(cycle);
+        effects.push({ kind: "back", to: (cycle.anchor as Pose).position });
+        return { op: "jump", to: cycle.anchor as Pose };
       }
       case "end": {
         while (cycles.length > 0 && !stop) leaveInnermost();
-        discharge(runPromises);
+        endIteration(run);
         effects.push({ kind: "end" });
-        const open = lines.flatMap((line) => (line.text === null && line.term ? pendingLabels(line.term) : []));
-        if (!stop && open.length > 0) {
-          const symbols = [...new Set(open)];
+        for (const [, open] of slots) {
+          for (const slot of open) effects.push({ kind: "unanswered", slot: slot.id, symbol: store.format(slot.symbol) });
+        }
+        const undetermined = lines.flatMap((line) => (line.text === null && line.term ? pendingLabels(line.term) : []));
+        if (!stop && undetermined.length > 0) {
+          const symbols = [...new Set(undetermined)];
           effects.push({ kind: "ambiguous", symbols });
           halt("AMBIGUOUS", `the output depends on ${symbols.join(", ")}, which the constraints leave open`);
         }
@@ -277,17 +416,22 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
         return forward;
       }
       case "assert": {
-        // Constrain the symbolic identity, so the trace shows what the statement is about.
-        const left = recorded(operation.name);
-        const right = operation.value.kind === "name" ? recorded(operation.value.name) : read(operation.value);
-        constrain(termOf(left), termOf(right), "past", null, sentence);
+        const left = operation.at === "start" ? atStart(operation.name) : recorded(operation.name);
+        constrain(termOf(left), termOf(readRecorded(operation.value)), operation.at === "start" ? "past, at 처음" : "past", sentence);
         return forward;
       }
       case "promise": {
+        const current = scope();
         const term = termOf(read(operation.value));
-        const promise: Promise = { name: operation.name, term, madeAt: now, sentence };
-        effects.push({ kind: "promise", name: operation.name, term: store.format(term), due: dueLabel() });
-        (cycles[cycles.length - 1]?.promises ?? runPromises).push(promise);
+        effects.push({ kind: "promise", name: operation.name, term: store.format(term), due: dueLabel(current) });
+        current.promises.push({ name: operation.name, term, madeAt: now, sentence });
+        return forward;
+      }
+      case "fixed": {
+        const current = scope();
+        if (!current.anchor) throw new RuntimeFault("'처음은 끝이었다' needs an open '여기가 처음이다' whose start it can compare with");
+        current.fixed.push({ madeAt: now, sentence });
+        effects.push({ kind: "fixed", due: dueLabel(current) });
         return forward;
       }
     }
@@ -335,7 +479,8 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     state: store.state(info.id),
     value: info.value ? renderValue(info.value) : null,
     resolvedAt: info.resolvedAt,
-    mark: info.retroactive ? "RETRO" : null,
+    loop: info.selfLoop,
+    mark: info.value && info.selfLoop ? "SELF_CAUSED" : info.retroactive ? "RETRO" : null,
   });
 
   return {

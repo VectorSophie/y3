@@ -122,12 +122,12 @@ describe("orthography is lint, not syntax", () => {
 describe("past and future tense are relations (M3)", () => {
   const relations: [string, unknown][] = [
     ["값은 미정이다.", { kind: "declare", noun: "값" }],
-    ["값은 3이었다.", { kind: "assert", noun: "값", value: int(3) }],
-    ["값은 4였다.", { kind: "assert", noun: "값", value: int(4) }],
-    ["원래는 값이었다.", { kind: "assert", noun: "원래", value: noun("값") }],
-    ['이름은 "이상"이었다.', { kind: "assert", noun: "이름", value: { kind: "text", value: "이상" } }],
-    ["값은 5일 것이다.", { kind: "promise", noun: "값", value: int(5) }],
-    ["합은 값일 것이다.", { kind: "promise", noun: "합", value: noun("값") }],
+    ["값은 3이었다.", { kind: "assert", noun: "값", anchor: null, value: int(3) }],
+    ["값은 4였다.", { kind: "assert", noun: "값", anchor: null, value: int(4) }],
+    ["원래는 값이었다.", { kind: "assert", noun: "원래", anchor: null, value: noun("값") }],
+    ['이름은 "이상"이었다.', { kind: "assert", noun: "이름", anchor: null, value: { kind: "text", value: "이상" } }],
+    ["값은 5일 것이다.", { kind: "promise", noun: "값", anchor: null, value: int(5) }],
+    ["합은 값일 것이다.", { kind: "promise", noun: "합", anchor: null, value: noun("값") }],
   ];
   for (const [text, expected] of relations) {
     it(text, () => {
@@ -148,14 +148,44 @@ describe("past and future tense are relations (M3)", () => {
   });
 });
 
-describe("forms for later milestones are recognised, not run", () => {
+describe("temporal cycles (M4)", () => {
+  const cycles: [string, unknown][] = [
+    ["수가 다음에서 온다.", { kind: "receive", noun: "수" }],
+    ["다음에서 수가 온다.", { kind: "receive", noun: "수" }],
+    ["수를 전으로 보낸다.", { kind: "send", noun: "수" }],
+    ["처음은 끝이었다.", { kind: "fixed" }],
+    ["처음의 값은 0이었다.", { kind: "assert", noun: "값", anchor: "처음", value: int(0) }],
+    ["끝의 값은 0일 것이다.", { kind: "promise", noun: "값", anchor: "끝", value: int(0) }],
+    ["원래는 처음의 값이다.", { kind: "assign", noun: "원래", value: { kind: "anchored", anchor: "처음", name: "값" } }],
+    ["결과는 끝의 합이다.", { kind: "assign", noun: "결과", value: { kind: "anchored", anchor: "끝", name: "합" } }],
+    ["처음의 값을 말한다.", { kind: "say", value: { kind: "anchored", anchor: "처음", name: "값" } }],
+  ];
+  for (const [text, expected] of cycles) {
+    it(text, () => {
+      expect(ok(text)).toEqual(expected);
+    });
+  }
+
+  const wrong: [string, string][] = [
+    ["처음의 값은 3이다.", CODES.ANCHOR_WRITE],
+    ["끝의 값에 1을 더한다.", CODES.ANCHOR_WRITE],
+    ["처음의 값은 0일 것이다.", CODES.ANCHOR_TENSE],
+    ["끝의 값은 0이었다.", CODES.ANCHOR_TENSE],
+    ["끝은 처음일 것이다.", CODES.UNKNOWN_SENTENCE],
+    ["수가 전에서 온다.", CODES.WRONG_ROLES],
+    ["수를 다음으로 보낸다.", CODES.WRONG_ROLES],
+    ["3을 전으로 보낸다.", CODES.BAD_PHRASE],
+  ];
+  for (const [text, code] of wrong) {
+    it(`rejects ${text}`, () => {
+      expect(rejected(text)).toBe(code);
+    });
+  }
+});
+
+describe("forms outside the core are recognised, not run", () => {
   const later: [string, string][] = [
-    ["처음은 끝이었다.", CODES.TEMPORAL_LATER],
-    ["끝은 처음일 것이다.", CODES.TEMPORAL_LATER],
-    ["처음의 값은 0이었다.", CODES.TEMPORAL_LATER],
     ["결과가 0일 것이라면 남쪽을 본다.", CODES.TEMPORAL_LATER],
-    ["수가 다음에서 온다.", CODES.FEATURE_LATER],
-    ["수를 전으로 보낸다.", CODES.FEATURE_LATER],
     ["값에 2를 곱한다.", CODES.FEATURE_LATER],
     ["값을 듣는다.", CODES.FEATURE_LATER],
     ["값에 1을 더했다.", CODES.VERB_TENSE],

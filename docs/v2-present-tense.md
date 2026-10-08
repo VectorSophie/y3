@@ -1,6 +1,6 @@
 # Y3 v2 — the present-tense core (M2)
 
-M2 makes the rule *present tense executes* real. (M3 has since added `미정이다`, `였다` and `일 것이다`; see `v2-temporal-core.md`.) This is the complete sentence set it
+M2 makes the rule *present tense executes* real. (M3 has since added `미정이다`, `였다` and `일 것이다`, and M4 channels, fixed points and time anchors; see `v2-temporal-core.md` and `v2-temporal-cycles.md`.) This is the complete sentence set it
 accepts. Everything else is either recognised and refused (past and future tense,
 unknowns, channels) or reported as an unknown sentence. The full design is in
 `v2-space-and-time.md`.
@@ -47,8 +47,6 @@ is a compile error. Reading one that this run hasn't assigned *yet* is a runtime
 
 | Form | Code | Arrives |
 |---|---|---|
-| `처음은 끝이었다`, `처음의` / `끝의` | `Y3T001` | M4 |
-| `온다` / `보낸다` (channels) | `Y3T002` | M4 |
 | `일 것이라면`, `이었다면` | `Y3T001` | experimental |
 | `곱한다`, `나눈다`, `듣는다` | `Y3T002` | when a program needs them |
 | past or future verbs (`더했다`, `더할 것이다`) | `Y3G008` | never; only states take tense |
