@@ -1,9 +1,11 @@
-import type { Comment, DocumentAst, InlinePlaneAst, PlaneRefAst } from "../language/ast";
+import type { Comment, DefinitionAst, DocumentAst, InlinePlaneAst, PlaneRefAst } from "../language/ast";
 import { APPENDIX_STYLE, planeStyle, type PlaneStyle, type Projection } from "./projection";
 import { displayWidth } from "./width";
 
-// Canonical text for a document. Formatting never changes the AST (other than source
-// positions): parse(format(parse(s))) equals parse(s) for every projection.
+// Canonical text for a document. Formatting changes only what carries no meaning:
+// whitespace, and the order of the ※ section. parse(format(parse(s))) equals
+// canonicalizeDocument(parse(s)) for every projection, which is parse(s) itself
+// whenever s is already canonical.
 
 export type FormatOptions = { projection?: Projection };
 
@@ -48,7 +50,33 @@ function renderPlane(plane: InlinePlaneAst | PlaneRefAst, style: PlaneStyle): st
   return [`${indent}⟦`, ...renderRows(plane, style), `${indent}⟧`];
 }
 
-export function formatDocument(ast: DocumentAst, options: FormatOptions = {}): string {
+// The one canonical order of the ※ section, shared by fmt and pack: named planes in
+// order of first use in the volume, then never-used planes in lexical (code point)
+// order. Ties (duplicate names, an error caught later) keep their source order.
+export function canonicalDefinitionOrder(volume: DocumentAst["volume"], definitions: readonly DefinitionAst[]): DefinitionAst[] {
+  const firstUse = new Map<string, number>();
+  volume.forEach((slot, z) => {
+    if (slot.plane.kind === "ref" && !firstUse.has(slot.plane.name)) {
+      firstUse.set(slot.plane.name, z);
+    }
+  });
+  return [...definitions].sort((a, b) => {
+    const za = firstUse.get(a.name) ?? Number.POSITIVE_INFINITY;
+    const zb = firstUse.get(b.name) ?? Number.POSITIVE_INFINITY;
+    if (za !== zb) return za - zb;
+    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+  });
+}
+
+export function canonicalizeDocument(ast: DocumentAst): DocumentAst {
+  if (!ast.appendix) {
+    return ast;
+  }
+  return { ...ast, appendix: { ...ast.appendix, definitions: canonicalDefinitionOrder(ast.volume, ast.appendix.definitions) } };
+}
+
+export function formatDocument(source: DocumentAst, options: FormatOptions = {}): string {
+  const ast = canonicalizeDocument(source);
   const projection = options.projection ?? "perspective";
   const blocks: string[][] = [];
 

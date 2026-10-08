@@ -4,7 +4,6 @@ import {
   MAIN_PATH,
   MANIFEST_PATH,
   packDocument,
-  sameDocument,
   unpackDocument,
   Y3DocumentError,
   type FileMap,
@@ -32,7 +31,7 @@ describe("pack / unpack", () => {
     });
   }
 
-  it("orders named planes by first use, then by name, and keeps every comment", () => {
+  it("converges with fmt on the canonical order and keeps every comment", () => {
     const source = `⟦ :b: ⟧
 
 ⟦ :a: ⟧
@@ -56,18 +55,13 @@ describe("pack / unpack", () => {
 # the end
 `;
     const packed = packDocument(unpackDocument(source));
+    expect(packed).toBe(formatDocument(parseOk(source)));
+    expect(formatDocument(parseOk(packed))).toBe(packed);
     const ast = parseOk(packed);
     expect(ast.appendix?.definitions.map((definition) => definition.name)).toEqual(["b", "a", "z"]);
     expect(ast.appendix?.comments.map((comment) => comment.text)).toEqual([" before the section"]);
     expect(ast.appendix?.definitions[1]?.comments.map((comment) => comment.text)).toEqual([" about a"]);
     expect(ast.trailingComments.map((comment) => comment.text)).toEqual([" the end"]);
-    // Only the order of the ※ section can differ from the source.
-    const reordered = parseOk(source);
-    const appendix = reordered.appendix;
-    if (!appendix) throw new Error("expected a ※ section");
-    const byName = new Map(appendix.definitions.map((definition) => [definition.name, definition]));
-    appendix.definitions = ["b", "a", "z"].map((name) => byName.get(name)).filter((definition) => definition !== undefined);
-    expect(sameDocument(ast, reordered)).toBe(true);
   });
 
   const rejects = (files: FileMap, code: string) => {

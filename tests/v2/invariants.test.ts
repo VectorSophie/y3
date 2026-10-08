@@ -40,6 +40,29 @@ describe("round trip: parse(format(parse(s))) = parse(s)", () => {
   });
 });
 
+describe("the ※ section has one canonical order", () => {
+  const variants = [
+    "⟦ :b: ⟧\n⟦ :a: ⟧\n※\n:z: ⟦ [Z] ⟧\n:a: ⟦ [A] ⟧\n:y: ⟦ [Y] ⟧\n:b: ⟦ [B] ⟧\n",
+    "⟦ :b: ⟧\n⟦ :a: ⟧\n※\n:y: ⟦ [Y] ⟧\n:b: ⟦ [B] ⟧\n:a: ⟦ [A] ⟧\n:z: ⟦ [Z] ⟧\n",
+    "⟦ :b: ⟧\n⟦ :a: ⟧\n※\n:a: ⟦ [A] ⟧\n:z: ⟦ [Z] ⟧\n:b: ⟦ [B] ⟧\n:y: ⟦ [Y] ⟧\n",
+  ];
+
+  it("orders by first use, then unused planes lexically", () => {
+    const ast = parseOk(formatDocument(parseOk(variants[0] ?? "")));
+    expect(ast.appendix?.definitions.map((definition) => definition.name)).toEqual(["b", "a", "y", "z"]);
+  });
+
+  it("gives every ordering of the same definitions the same text", () => {
+    const texts = variants.map((source) => formatDocument(parseOk(source)));
+    expect(new Set(texts).size).toBe(1);
+  });
+
+  it("keeps each definition's comments with it when reordering", () => {
+    const text = formatDocument(parseOk("⟦ :a: ⟧\n※\n# about z\n:z: ⟦ [Z] ⟧\n# about a\n:a: ⟦ [A] ⟧\n"));
+    expect(text).toBe("⟦ :a: ⟧\n\n※\n\n# about a\n:a: ⟦\n[A]\n⟧\n\n# about z\n:z: ⟦\n[Z]\n⟧\n");
+  });
+});
+
 describe("projection is not semantics", () => {
   for (const { path, source } of fixtures()) {
     it(`${path}: every projection parses to the same document and space`, () => {

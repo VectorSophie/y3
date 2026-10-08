@@ -10,8 +10,8 @@ import { formatDocument } from "../format/formatter";
 //                            line when comments belong to the ※ section
 //   planes/<name>.y2         one named plane per file
 //
-// A folder has no order, so pack() lists named planes by first use in the volume, then
-// unused ones by name. pack(unpack(doc)) is the canonical formatting of doc.
+// A folder has no order; the formatter puts the ※ section in its one canonical order
+// (first use, then lexical), so pack(unpack(doc)) is exactly formatDocument(doc).
 
 export const MANIFEST_PATH = "META-INF/manifest.toml";
 export const MAIN_PATH = "space/main.y3s";
@@ -120,19 +120,6 @@ export function packDocument(files: FileMap): string {
       error(CODES.FRONT_MATTER_IN_MAIN, `${MAIN_PATH} cannot have front matter; the manifest lives in ${MANIFEST_PATH}`),
     ]);
   }
-
-  const firstUse = new Map<string, number>();
-  main.volume.forEach((slot, z) => {
-    if (slot.plane.kind === "ref" && !firstUse.has(slot.plane.name)) {
-      firstUse.set(slot.plane.name, z);
-    }
-  });
-  planeFiles.sort((a, b) => {
-    const za = firstUse.get(a.name) ?? Number.POSITIVE_INFINITY;
-    const zb = firstUse.get(b.name) ?? Number.POSITIVE_INFINITY;
-    if (za !== zb) return za - zb;
-    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
-  });
 
   const definitions = [...(main.appendix?.definitions ?? []), ...planeFiles];
   const manifest = files.get(MANIFEST_PATH);

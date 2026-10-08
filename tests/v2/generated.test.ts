@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSpace,
+  canonicalizeDocument,
   formatDocument,
   packDocument,
   PROJECTIONS,
@@ -112,18 +113,21 @@ describe("generated documents", () => {
       const ast = parseOk(source);
       const label = `seed ${seed}:\n${source}`;
 
+      // fmt(s), fmt(fmt(s)) and pack(unpack(s)) are one and the same text.
       const canonical = formatDocument(ast);
-      expect(sameDocument(parseOk(canonical), ast), label).toBe(true);
       expect(formatDocument(parseOk(canonical)), label).toBe(canonical);
+      expect(packDocument(unpackDocument(source)), label).toBe(canonical);
 
+      // Formatting changes nothing but whitespace and the order of the ※ section.
       for (const projection of PROJECTIONS) {
-        expect(sameDocument(parseOk(formatDocument(ast, { projection })), ast), `${label}\n(${projection})`).toBe(true);
+        expect(sameDocument(parseOk(formatDocument(ast, { projection })), canonicalizeDocument(ast)), `${label}\n(${projection})`).toBe(
+          true,
+        );
       }
 
       const { space } = buildSpace(ast);
       expect(space, label).not.toBeNull();
-      const packed = packDocument(unpackDocument(source));
-      const repacked = buildSpace(parseOk(packed)).space;
+      const repacked = buildSpace(parseOk(canonical)).space;
       expect(repacked && space && semanticKey(repacked) === semanticKey(space), label).toBe(true);
     }
   });
