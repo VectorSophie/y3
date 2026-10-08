@@ -60,7 +60,24 @@ y3 run countdown.y3      # 3, 2, 1
 y3 trace countdown.y3    # every executed cell and its effects
 ```
 
-Past and future tense (`였다`, `일 것이다`) are recognised but refused until M3.
+**M3** adds the temporal core: past and future tense constrain instead of executing
+(`docs/v2-temporal-core.md`). A later statement can determine an earlier unknown:
+
+```
+⟦
+[값은 미정이다.]
+[원래는 값이다.]
+[값에 1을 더한다.]
+[원래를 말한다.]
+[값은 4였다.]
+[끝이다.]
+⟧
+```
+
+This prints `3`: α + 1 = 4 at step 5 determines the α printed at step 4. When the
+constraints have no solution the run ends in `PARADOX`; when they leave the output open,
+`AMBIGUOUS`; and a condition that needs an open value is `UNRESOLVED`. Fixed points and
+temporal channels come in M4.
 `run` and `trace` choose v1 or v2 from the file: v2 documents contain planes. The
 sections below describe v1, whose examples are in `examples/v1/`; v2 examples are in
 `examples/v2/`.
@@ -172,3 +189,4 @@ The IDE includes:
 - `docs/v2-samchagak.md` (삼차각설계도: Yi Sang–based v2 concept)
 - `docs/v2-space-and-time.md` (accepted v2 design: container, planes, orientation, tense-as-constraint)
 - `docs/v2-present-tense.md` (the M2 sentence set)
+- `docs/v2-temporal-core.md` (M3: 미정, 였다, 일 것이다)

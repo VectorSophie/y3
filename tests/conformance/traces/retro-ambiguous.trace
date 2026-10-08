@@ -1,0 +1,14 @@
+1 (0,0,0) 남/위 [값은 미정이다.] → (0,1,0) 남/위
+  값 := α1  [미정]
+2 (0,1,0) 남/위 [원래는 값이다.] → (0,2,0) 남/위
+  원래 := α1
+3 (0,2,0) 남/위 [값에 1을 더한다.] → (0,3,0) 남/위
+  값 := α1 + 1
+4 (0,3,0) 남/위 [원래를 말한다.] → (0,4,0) 남/위
+  out α1  [held]
+5 (0,4,0) 남/위 [끝이다.] → (0,4,0) 남/위
+  end
+  ambiguous: α1 has no unique value
+진단: 중의 (AMBIGUOUS) · 5보 · (0,4,0): the output depends on α1, which the constraints leave open
+symbols:
+  α1 (값, born t1) declared, open

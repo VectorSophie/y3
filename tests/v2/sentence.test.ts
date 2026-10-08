@@ -119,14 +119,41 @@ describe("orthography is lint, not syntax", () => {
   });
 });
 
-describe("past and future are recognised, not run (M3)", () => {
+describe("past and future tense are relations (M3)", () => {
+  const relations: [string, unknown][] = [
+    ["값은 미정이다.", { kind: "declare", noun: "값" }],
+    ["값은 3이었다.", { kind: "assert", noun: "값", value: int(3) }],
+    ["값은 4였다.", { kind: "assert", noun: "값", value: int(4) }],
+    ["원래는 값이었다.", { kind: "assert", noun: "원래", value: noun("값") }],
+    ['이름은 "이상"이었다.', { kind: "assert", noun: "이름", value: { kind: "text", value: "이상" } }],
+    ["값은 5일 것이다.", { kind: "promise", noun: "값", value: int(5) }],
+    ["합은 값일 것이다.", { kind: "promise", noun: "합", value: noun("값") }],
+  ];
+  for (const [text, expected] of relations) {
+    it(text, () => {
+      expect(ok(text)).toEqual(expected);
+    });
+  }
+
+  it("lints the past-tense allomorph by the Sino-Korean reading", () => {
+    const lint = (text: string) => parseSentence(text).issues.map((issue) => issue.message);
+    expect(lint("값은 3였다.")).toEqual(["non-canonical Korean: write '3이었다' instead of '3였다'"]);
+    expect(lint("값은 4이었다.")).toEqual(["non-canonical Korean: write '4였다' instead of '4이었다'"]);
+    expect(ok("값은 3였다.")).toEqual(ok("값은 3이었다."));
+  });
+
+  it("keeps relations out of conditions: a consequence is present tense", () => {
+    expect(rejected("값이 2이면 수는 3이었다.")).toBe(CODES.BAD_CONDITIONAL);
+    expect(rejected("값이 2이면 수는 3일 것이다.")).toBe(CODES.BAD_CONDITIONAL);
+  });
+});
+
+describe("forms for later milestones are recognised, not run", () => {
   const later: [string, string][] = [
-    ["값은 3이었다.", CODES.TEMPORAL_LATER],
-    ["값은 4였다.", CODES.TEMPORAL_LATER],
-    ["값은 5일 것이다.", CODES.TEMPORAL_LATER],
     ["처음은 끝이었다.", CODES.TEMPORAL_LATER],
+    ["끝은 처음일 것이다.", CODES.TEMPORAL_LATER],
+    ["처음의 값은 0이었다.", CODES.TEMPORAL_LATER],
     ["결과가 0일 것이라면 남쪽을 본다.", CODES.TEMPORAL_LATER],
-    ["값은 미정이다.", CODES.FEATURE_LATER],
     ["수가 다음에서 온다.", CODES.FEATURE_LATER],
     ["수를 전으로 보낸다.", CODES.FEATURE_LATER],
     ["값에 2를 곱한다.", CODES.FEATURE_LATER],

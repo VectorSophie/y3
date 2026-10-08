@@ -54,13 +54,13 @@ describe("values", () => {
 
   it("fault when a noun is read before this run gave it a value", () => {
     const result = run(column("수를 말한다.", "수는 1이다.", "끝이다."));
-    expect(result.outcome).toMatchObject({ status: "FAULT", steps: 0, message: "'수' has no value yet" });
+    expect(result.outcome).toMatchObject({ status: "FAULT", steps: 0, message: "'수' has no value or symbol yet" });
   });
 
   it("report a noun that no sentence ever gives a value, before running", () => {
     const { compiled } = compile(column("없는을 말한다.", "끝이다."));
     expect(compiled.program).toBeNull();
-    expect(compiled.diagnostics.map((d) => d.code)).toEqual([SENTENCE_CODES.NEVER_ASSIGNED]);
+    expect(compiled.diagnostics.map((d) => d.code)).toEqual([SENTENCE_CODES.NEVER_INTRODUCED]);
   });
 });
 

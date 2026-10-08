@@ -1,5 +1,5 @@
 import type { ActAst, Expr, SentenceAst } from "../language/sentence-ast";
-import type { Operand, Operation } from "./operations";
+import type { Act, Operand, Operation } from "./operations";
 
 // Sentence AST → operation. A thin, total mapping: everything Korean-specific has
 // already been resolved by the sentence parser.
@@ -15,12 +15,12 @@ function operand(expr: Expr): Operand {
   }
 }
 
-type SimpleOperation = Exclude<Operation, { op: "when" } | { op: "anchor" }>;
-
-function lowerAct(act: Exclude<ActAst, { kind: "anchor" }>): SimpleOperation {
+function lowerAct(act: Exclude<ActAst, { kind: "anchor" }>): Act {
   switch (act.kind) {
     case "assign":
       return { op: "assign", name: act.noun, value: operand(act.value) };
+    case "declare":
+      return { op: "declare", name: act.noun };
     case "add":
       return { op: "add", name: act.noun, amount: operand(act.amount) };
     case "subtract":
@@ -43,38 +43,50 @@ function lowerAct(act: Exclude<ActAst, { kind: "anchor" }>): SimpleOperation {
 }
 
 export function lower(sentence: SentenceAst): Operation {
-  if (sentence.kind === "anchor") {
-    return { op: "anchor" };
+  switch (sentence.kind) {
+    case "anchor":
+      return { op: "anchor" };
+    case "assert":
+      return { op: "assert", name: sentence.noun, value: operand(sentence.value) };
+    case "promise":
+      return { op: "promise", name: sentence.noun, value: operand(sentence.value) };
+    case "when":
+      if (sentence.then.kind === "anchor") {
+        throw new Error("an anchor cannot be conditional"); // the parser rejects this
+      }
+      return {
+        op: "when",
+        test: { left: operand(sentence.condition.left), right: operand(sentence.condition.right), negated: sentence.condition.negated },
+        then: lowerAct(sentence.then),
+      };
+    default:
+      return lowerAct(sentence);
   }
-  if (sentence.kind === "when") {
-    if (sentence.then.kind === "anchor") {
-      throw new Error("an anchor cannot be conditional"); // the parser rejects this
-    }
-    return {
-      op: "when",
-      test: { left: operand(sentence.condition.left), right: operand(sentence.condition.right), negated: sentence.condition.negated },
-      then: lowerAct(sentence.then),
-    };
-  }
-  return lowerAct(sentence);
 }
 
-// Names an operation reads and writes, for static checks.
-export function namesIn(operation: Operation): { reads: string[]; writes: string[] } {
+// How an operation touches names, for static checks. A name leaves the unbound state
+// only when it is introduced: assigned in the present, or declared 미정. Reading it, or
+// constraining it in the past or future, needs it to be introduced somewhere.
+export function namesIn(operation: Operation): { uses: string[]; introduces: string[] } {
   const read = (o: Operand) => (o.kind === "name" ? [o.name] : []);
   switch (operation.op) {
     case "assign":
-      return { reads: read(operation.value), writes: [operation.name] };
+      return { uses: read(operation.value), introduces: [operation.name] };
+    case "declare":
+      return { uses: [], introduces: [operation.name] };
     case "add":
     case "subtract":
-      return { reads: [operation.name, ...read(operation.amount)], writes: [operation.name] };
+      return { uses: [operation.name, ...read(operation.amount)], introduces: [operation.name] };
     case "say":
-      return { reads: read(operation.value), writes: [] };
+      return { uses: read(operation.value), introduces: [] };
+    case "assert":
+    case "promise":
+      return { uses: [operation.name, ...read(operation.value)], introduces: [] };
     case "when": {
       const inner = namesIn(operation.then);
-      return { reads: [...read(operation.test.left), ...read(operation.test.right), ...inner.reads], writes: inner.writes };
+      return { uses: [...read(operation.test.left), ...read(operation.test.right), ...inner.uses], introduces: inner.introduces };
     }
     default:
-      return { reads: [], writes: [] };
+      return { uses: [], introduces: [] };
   }
 }

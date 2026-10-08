@@ -5,7 +5,7 @@ import { loadDocument } from "../container/document";
 import { compileProgram } from "../semantics/program";
 import { runProgram } from "../runtime/interpreter";
 import { formatProgramTrace } from "../runtime/program-trace";
-import { describeOutcome, EXIT_CODES } from "../runtime/outcomes";
+import { describeProgramOutcome, PROGRAM_EXIT_CODES } from "../runtime/program-outcome";
 import { packDocument, unpackDocument, type FileMap } from "../container/pack";
 import { formatDocument } from "../format/formatter";
 import { isProjection, PROJECTIONS } from "../format/projection";
@@ -56,9 +56,9 @@ export function runV2(filePath: string, source: string, options: { maxSteps?: nu
     process.stdout.write(formatProgramTrace(result));
   } else {
     for (const line of result.output) process.stdout.write(`${line}\n`);
-    if (result.outcome.status !== "HALT") console.error(describeOutcome(result.outcome));
+    if (result.outcome.status !== "HALT") console.error(describeProgramOutcome(result.outcome));
   }
-  process.exitCode = EXIT_CODES[result.outcome.status];
+  process.exitCode = PROGRAM_EXIT_CODES[result.outcome.status];
 }
 
 function readTree(root: string): FileMap {
