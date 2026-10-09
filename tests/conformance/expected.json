@@ -1,5 +1,5 @@
 {
-  "$comment": "Expected run results for conformance fixtures. Each entry runs once its milestone lands; until then M0 only parses and round-trips it. status is one of HALT FAULT VOID STEP_LIMIT PARADOX UNRESOLVED AMBIGUOUS. output lists printed lines; '?' marks a line that has no unique value. unknowns are identified by the step that created them. trace, when present, is a golden file compared exactly against `y3 trace` output.",
+  "$comment": "Expected run results for conformance fixtures. Each entry runs once its milestone lands; until then M0 only parses and round-trips it. status is one of HALT FAULT VOID STEP_LIMIT PARADOX UNRESOLVED AMBIGUOUS, or REJECTED for a program that `y3 check` must refuse with the listed diagnostic codes. output lists printed lines; '?' marks a line that has no unique value. unknowns are identified by the step that created them. trace, when present, is a golden file compared exactly against `y3 trace` output; ir likewise against `y3 ir`. types lists nouns' inferred types.",
   "fixtures": [
     {"path": "tests/conformance/present/arithmetic.y3", "milestone": "M2", "status": "HALT", "output": ["값과 합", "10", "20"], "steps": 9, "trace": "tests/conformance/traces/arithmetic.trace"},
     {"path": "tests/conformance/present/branch-taken.y3", "milestone": "M2", "status": "HALT", "output": ["둘"], "steps": 4, "trace": "tests/conformance/traces/branch-taken.trace"},
@@ -26,6 +26,13 @@
     {"path": "tests/conformance/cycles/fixed-point-self-caused.y3", "milestone": "M4", "status": "HALT", "output": ["0"], "steps": 6, "trace": "tests/conformance/traces/fixed-point-self-caused.trace", "unknowns": [{"bornAtStep": 1, "value": "0", "mark": "SELF_CAUSED"}]},
     {"path": "tests/conformance/cycles/neutral-step.y3", "milestone": "M4", "status": "HALT", "output": ["0"], "steps": 7, "trace": "tests/conformance/traces/neutral-step.trace", "unknowns": [{"bornAtStep": 1, "value": "0", "mark": "SELF_CAUSED"}]},
     {"path": "tests/conformance/cycles/anchor-start.y3", "milestone": "M4", "status": "HALT", "output": ["5", "6"], "steps": 8, "trace": "tests/conformance/traces/anchor-start.trace"},
-    {"path": "tests/conformance/cycles/anchor-end.y3", "milestone": "M4", "status": "HALT", "output": ["5"], "steps": 5, "trace": "tests/conformance/traces/anchor-end.trace", "unknowns": [{"bornAtStep": 1, "value": "5", "mark": "RETRO"}]}
+    {"path": "tests/conformance/cycles/anchor-end.y3", "milestone": "M4", "status": "HALT", "output": ["5"], "steps": 5, "trace": "tests/conformance/traces/anchor-end.trace", "unknowns": [{"bornAtStep": 1, "value": "5", "mark": "RETRO"}]},
+    {"path": "tests/conformance/typed/infer-arithmetic.y3", "milestone": "M5", "status": "HALT", "output": ["4"], "steps": 5, "trace": "tests/conformance/traces/infer-arithmetic.trace", "ir": "tests/conformance/ir/infer-arithmetic.ir", "types": {"값": "Int"}},
+    {"path": "tests/conformance/typed/infer-testimony.y3", "milestone": "M5", "status": "HALT", "output": ["이상"], "steps": 4, "trace": "tests/conformance/traces/infer-testimony.trace", "types": {"값": "Text"}},
+    {"path": "tests/conformance/typed/bool-branch.y3", "milestone": "M5", "status": "HALT", "output": ["그렇다", "참"], "steps": 5, "trace": "tests/conformance/traces/bool-branch.trace", "types": {"참임": "Bool"}},
+    {"path": "tests/conformance/typed/call.y3", "milestone": "M5", "status": "HALT", "output": ["7", "10"], "steps": 6, "trace": "tests/conformance/traces/call.trace", "ir": "tests/conformance/ir/call.ir", "types": {"값": "Int", "크기": "Int", "큰것": "Int"}},
+    {"path": "tests/conformance/typed/reject-int-text.y3", "milestone": "M5", "status": "REJECTED", "codes": ["Y3Y001"], "output": [], "steps": 0},
+    {"path": "tests/conformance/typed/reject-call-argument.y3", "milestone": "M5", "status": "REJECTED", "codes": ["Y3Y001"], "output": [], "steps": 0},
+    {"path": "tests/conformance/typed/reject-temporal-bool.y3", "milestone": "M5", "status": "REJECTED", "codes": ["Y3Y004"], "output": [], "steps": 0}
   ]
 }

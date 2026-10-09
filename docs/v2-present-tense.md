@@ -1,6 +1,6 @@
 # Y3 v2 — the present-tense core (M2)
 
-M2 makes the rule *present tense executes* real. (M3 has since added `미정이다`, `였다` and `일 것이다`, and M4 channels, fixed points and time anchors; see `v2-temporal-core.md` and `v2-temporal-cycles.md`.) This is the complete sentence set it
+M2 makes the rule *present tense executes* real. (M3 has since added `미정이다`, `였다` and `일 것이다`, M4 channels, fixed points and time anchors, and M5 static types, `Bool` and colon calls; see `v2-temporal-core.md`, `v2-temporal-cycles.md` and `v2-typed-core.md`.) This is the complete sentence set it
 accepts. Everything else is either recognised and refused (past and future tense,
 unknowns, channels) or reported as an unknown sentence. The full design is in
 `v2-space-and-time.md`.
@@ -31,8 +31,8 @@ is a compile error. Reading one that this run hasn't assigned *yet* is a runtime
 | `[N이 E이면 ⟨sentence⟩.]` | do the sentence if N equals E |
 | `[N이 E이 아니면 ⟨sentence⟩.]` | do the sentence if N differs from E |
 
-- **Equality.** A condition compares kind and value, so the integer `3` is not the text
-  `"3"`.
+- **Equality.** A condition compares two values of the same type. Since M5, comparing
+  the integer `3` with the text `"3"` is a type error at `y3 check`.
 - **Consequences.** A consequence is any sentence above except a condition or an anchor.
 - **Leaving a loop.** When a conditional back-edge's condition fails, execution falls
   through to the next cell and leaves the loop. Nested and consecutive loops in one

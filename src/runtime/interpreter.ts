@@ -1,30 +1,42 @@
 import type { Coordinate, Manifest, Pose } from "../space/manifest";
+import { PRINTLN } from "../ir/callables";
+import type { CallableId, Expr, Moment, NounId, Stmt } from "../ir/hir";
 import { coordinateKey, type CompiledProgram } from "../semantics/program";
-import { renderValue, sameValue, type Act, type ConcreteValue, type Operand, type Operation } from "../semantics/operations";
+import { renderValue, sameValue, UNIT, type ConcreteValue } from "../semantics/values";
 import { TemporalStore, type Resolution, type SymbolInfo } from "../temporal/store";
 import { carriesCause, literal, symbolsOf, TermError, type SymbolicTerm } from "../temporal/terms";
+import { concrete, evaluate, type EvalEnv, type Value } from "./evaluate";
 import type { DecodeResult, Instruction } from "./instructions";
 import { createMachine, step } from "./machine";
 import type { ProgramOutcome, TemporalStatus } from "./program-outcome";
 import type { TraceEntry } from "./trace";
 
-// The interpreter. Present tense executes on concrete values (M2). Past and future
-// tense add constraints to the temporal store, which resolves a symbol only when the
-// constraints leave exactly one value (M3). Temporal cycles (M4): channels carry a
-// value from later to earlier, fixed points equate an iteration's end with its start,
-// and time anchors read a name at 처음 or 끝 — all as linear equalities for the same
-// solver. The interpreter never sees Korean, the machine never sees values, and the
-// store never decides control flow.
+// The interpreter. It runs the typed IR, never the Korean that produced it. Present
+// tense executes on concrete values (M2). Past and future tense add constraints to the
+// temporal store, which resolves a symbol only when the constraints leave exactly one
+// value (M3). Temporal cycles (M4): channels carry a value from later to earlier, fixed
+// points equate an iteration's end with its start, and time anchors read a noun at
+// 처음 or 끝, all as linear equalities for the same solver. The interpreter never sees
+// Korean, the machine never sees values, and the store never decides control flow.
+//
+// A noun's history is a chain of semantic versions (값₀, 값₁, …), SSA style: each store,
+// declaration or receive defines a new version, and reads use the current one. A
+// 처음 snapshot is a set of versions, not a copy of the machine.
 
-// A noun's current binding. A name with no binding is unbound. Whether a binding has an
-// operational cause is read from its normal form (carriesCause), never from the syntax
-// that built it.
-type Binding =
-  | { readonly kind: "concrete"; readonly value: ConcreteValue }
-  | { readonly kind: "symbolic"; readonly term: SymbolicTerm };
+// A noun's binding: concrete, or a symbolic term. Whether it carries an operational
+// cause is read from its normal form (carriesCause), never from the syntax that built it.
+type Binding = Value;
 
-type Promise = { readonly name: string; readonly term: SymbolicTerm; readonly madeAt: number; readonly sentence: string };
-type EndRead = { readonly name: string; readonly symbol: SymbolicTerm; readonly madeAt: number; readonly sentence: string };
+type Version = {
+  readonly noun: NounId;
+  readonly index: number; // 값₀, 값₁, …
+  readonly binding: Binding;
+  readonly definedAt: number; // step
+  readonly uses: number[]; // steps that read this version
+};
+
+type Promise = { readonly noun: NounId; readonly term: SymbolicTerm; readonly madeAt: number; readonly sentence: string };
+type EndRead = { readonly noun: NounId; readonly symbol: SymbolicTerm; readonly madeAt: number; readonly sentence: string };
 type FixedPoint = { readonly madeAt: number; readonly sentence: string };
 
 // One iteration of a loop, or the whole run. It remembers how it began, what it wrote,
@@ -32,14 +44,14 @@ type FixedPoint = { readonly madeAt: number; readonly sentence: string };
 type Scope = {
   readonly anchor: Pose | null; // null for the run
   iteration: number;
-  start: Map<string, Binding>; // 처음: the bindings when this iteration began
-  written: Set<string>;
+  start: Map<NounId, Version>; // 처음: the versions current when this iteration began
+  written: Set<NounId>;
   promises: Promise[];
   endReads: EndRead[]; // 끝의 N, read before the end
   fixed: FixedPoint[]; // 처음은 끝이었다
 };
 
-type Slot = { readonly id: string; readonly name: string; readonly symbol: SymbolicTerm; readonly openedAt: number };
+type Slot = { readonly id: string; readonly noun: NounId; readonly symbol: SymbolicTerm; readonly openedAt: number };
 type Line = { text: string | null; term: SymbolicTerm | null; heldSince: number | null };
 
 export type Effect =
@@ -47,6 +59,7 @@ export type Effect =
   | { readonly kind: "set"; readonly name: string; readonly value: ConcreteValue }
   | { readonly kind: "say"; readonly line: string }
   | { readonly kind: "test"; readonly left: ConcreteValue; readonly right: ConcreteValue; readonly negated: boolean; readonly holds: boolean }
+  | { readonly kind: "condition"; readonly holds: boolean } // a Bool condition that is not a comparison
   | { readonly kind: "anchor"; readonly at: Coordinate; readonly iteration: number }
   | { readonly kind: "back"; readonly to: Coordinate }
   | { readonly kind: "leave"; readonly anchor: Coordinate }
@@ -92,15 +105,26 @@ export type SymbolSummary = {
   readonly mark: "SELF_CAUSED" | "RETRO" | null;
 };
 
+// One semantic version of a noun and its def-use record.
+export type VersionSummary = {
+  readonly noun: string;
+  readonly index: number;
+  readonly definedAt: number;
+  readonly value: string; // as it stands at the end of the run
+  readonly uses: readonly number[];
+};
+
 export type ProgramResult = {
   readonly outcome: ProgramOutcome;
   readonly output: readonly string[]; // "?" for a line with no unique value
-  readonly values: ReadonlyMap<string, ConcreteValue>; // names with concrete (or resolved) values
+  readonly values: ReadonlyMap<string, ConcreteValue>; // nouns with concrete (or resolved) values
   readonly symbols: readonly SymbolSummary[];
+  readonly versions: readonly VersionSummary[];
   readonly trace: readonly ProgramTraceEntry[];
 };
 
 class RuntimeFault extends Error {}
+class Stopped extends Error {} // a temporal stop (UNRESOLVED, PARADOX) mid-statement
 
 function sameCoordinate(a: Coordinate, b: Coordinate): boolean {
   return a.x === b.x && a.y === b.y && a.z === b.z;
@@ -112,11 +136,14 @@ function at(c: Coordinate): string {
 
 export function runProgram(program: CompiledProgram, manifest: Manifest, options: { maxSteps?: number } = {}): ProgramResult {
   const store = new TemporalStore();
-  const bindings = new Map<string, Binding>();
+  const names = new Map(program.nouns.map((noun) => [noun.id, noun.name]));
+  const nameOf = (id: NounId) => names.get(id) ?? `#${id}`;
+  const current = new Map<NounId, Version>();
+  const history: Version[] = [];
   const lines: Line[] = [];
   const run: Scope = { anchor: null, iteration: 1, start: new Map(), written: new Set(), promises: [], endReads: [], fixed: [] };
   const cycles: Scope[] = [];
-  const slots = new Map<string, Slot[]>(); // per name, most recent last
+  const slots = new Map<NounId, Slot[]>(); // per noun, most recent last
   let slotCount = 0;
   let effects: Effect[] = [];
   let now = 0; // the step being executed
@@ -134,64 +161,60 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
   const settle = (binding: Binding): Binding => {
     if (binding.kind === "concrete") return binding;
     const value = store.resolve(binding.term);
-    return value ? { kind: "concrete", value } : binding;
+    return value ? concrete(value) : binding;
   };
   const termOf = (binding: Binding): SymbolicTerm => (binding.kind === "concrete" ? literal(binding.value) : binding.term);
   const pendingLabels = (term: SymbolicTerm) => store.pending(term).map((info) => info.label);
 
-  // A name's binding as recorded, keeping its symbolic identity even when resolved.
-  const recorded = (name: string): Binding => {
-    const binding = bindings.get(name);
-    if (!binding) throw new RuntimeFault(`'${name}' has no value or symbol yet`);
-    return binding;
+  // A noun's current version, keeping its symbolic identity even when resolved.
+  const version = (noun: NounId): Version => {
+    const found = current.get(noun);
+    if (!found) throw new RuntimeFault(`'${nameOf(noun)}' has no value or symbol yet`);
+    return found;
   };
-  const bound = (name: string): Binding => settle(recorded(name));
+  const recorded = (noun: NounId): Binding => version(noun).binding;
+  const bound = (noun: NounId): Binding => {
+    const v = version(noun);
+    if (v.uses[v.uses.length - 1] !== now) v.uses.push(now);
+    return settle(v.binding);
+  };
 
-  const atStart = (name: string): Binding => {
-    const current = scope();
-    if (!current.anchor) throw new RuntimeFault(`'처음의 ${name}' needs an open '여기가 처음이다'`);
-    const binding = current.start.get(name);
-    if (!binding) throw new RuntimeFault(`'${name}' had no value at 처음 ${at(current.anchor.position)}`);
-    return binding;
+  // A new version of the noun.
+  const define = (noun: NounId, binding: Binding) => {
+    const previous = current.get(noun);
+    const next: Version = { noun, index: previous ? previous.index + 1 : 0, binding, definedAt: now, uses: [] };
+    current.set(noun, next);
+    history.push(next);
+    run.written.add(noun);
+    for (const cycle of cycles) cycle.written.add(noun);
+  };
+
+  const atStart = (noun: NounId): Binding => {
+    const s = scope();
+    if (!s.anchor) throw new RuntimeFault(`'처음의 ${nameOf(noun)}' needs an open '여기가 처음이다'`);
+    const v = s.start.get(noun);
+    if (!v) throw new RuntimeFault(`'${nameOf(noun)}' had no value at 처음 ${at(s.anchor.position)}`);
+    return v.binding;
   };
 
   // 끝의 N: a value from the end of the iteration, carried back as a fresh symbol that
   // the end will settle.
-  const fromEnd = (name: string): Binding => {
-    const current = scope();
-    const symbol = store.declare(name, now, "끝");
-    current.endReads.push({ name, symbol, madeAt: now, sentence });
-    effects.push({ kind: "endread", name, symbol: store.format(symbol), due: dueLabel(current) });
+  const fromEnd = (noun: NounId): Binding => {
+    const s = scope();
+    const symbol = store.declare(nameOf(noun), now, "끝");
+    s.endReads.push({ noun, symbol, madeAt: now, sentence });
+    effects.push({ kind: "endread", name: nameOf(noun), symbol: store.format(symbol), due: dueLabel(s) });
     return { kind: "symbolic", term: symbol };
   };
 
-  const read = (operand: Operand): Binding => {
-    switch (operand.kind) {
-      case "literal":
-        return { kind: "concrete", value: operand.value };
-      case "name":
-        return bound(operand.name);
-      case "anchored":
-        return operand.anchor === "start" ? settle(atStart(operand.name)) : fromEnd(operand.name);
-    }
-  };
-  // Like read, but a name keeps its symbolic identity, so constraints say what they are about.
-  const readRecorded = (operand: Operand): Binding => (operand.kind === "name" ? recorded(operand.name) : read(operand));
-
-  const markWritten = (name: string) => {
-    run.written.add(name);
-    for (const cycle of cycles) cycle.written.add(name);
-  };
-
-  const assign = (name: string, binding: Binding) => {
+  const assign = (noun: NounId, binding: Binding) => {
     const settled = settle(binding);
-    bindings.set(name, settled);
-    markWritten(name);
+    define(noun, settled);
     if (settled.kind === "concrete") {
-      effects.push({ kind: "set", name, value: settled.value });
+      effects.push({ kind: "set", name: nameOf(noun), value: settled.value });
     } else {
       store.noteUse(settled.term, now);
-      effects.push({ kind: "bind", name, term: store.format(settled.term) });
+      effects.push({ kind: "bind", name: nameOf(noun), term: store.format(settled.term) });
     }
   };
 
@@ -247,32 +270,33 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
   const endIteration = (ending: Scope) => {
     for (const promise of ending.promises.splice(0)) {
       if (stop) return;
-      const binding = bindings.get(promise.name);
-      if (!binding) throw new RuntimeFault(`'${promise.name}' was promised a value but has none when the promise falls due`);
-      constrain(termOf(binding), promise.term, `promised at t${promise.madeAt}`, promise.sentence);
+      const v = current.get(promise.noun);
+      if (!v) throw new RuntimeFault(`'${nameOf(promise.noun)}' was promised a value but has none when the promise falls due`);
+      constrain(termOf(v.binding), promise.term, `promised at t${promise.madeAt}`, promise.sentence);
     }
     for (const read of ending.endReads.splice(0)) {
       if (stop) return;
-      const binding = bindings.get(read.name);
-      if (!binding) throw new RuntimeFault(`'끝의 ${read.name}' was read, but '${read.name}' has no value at the end`);
-      noteLoop(read.symbol, termOf(binding), `끝의 ${read.name}`);
-      constrain(read.symbol, termOf(binding), `끝의 ${read.name} from t${read.madeAt}`, read.sentence);
+      const v = current.get(read.noun);
+      if (!v) throw new RuntimeFault(`'끝의 ${nameOf(read.noun)}' was read, but '${nameOf(read.noun)}' has no value at the end`);
+      noteLoop(read.symbol, termOf(v.binding), `끝의 ${nameOf(read.noun)}`);
+      constrain(read.symbol, termOf(v.binding), `끝의 ${nameOf(read.noun)} from t${read.madeAt}`, read.sentence);
     }
     for (const fixed of ending.fixed.splice(0)) {
-      for (const name of [...ending.written].sort()) {
+      const written = [...ending.written].sort((a, b) => (nameOf(a) < nameOf(b) ? -1 : nameOf(a) > nameOf(b) ? 1 : 0));
+      for (const noun of written) {
         if (stop) return;
-        const before = ending.start.get(name);
-        const after = bindings.get(name);
+        const before = ending.start.get(noun);
+        const after = current.get(noun);
         if (!before || !after || before === after) continue; // introduced during the iteration, or untouched
-        noteLoop(termOf(before), termOf(after), `fixed point at t${fixed.madeAt}`);
-        constrain(termOf(before), termOf(after), `처음은 끝이었다 at t${fixed.madeAt}`, fixed.sentence);
+        noteLoop(termOf(before.binding), termOf(after.binding), `fixed point at t${fixed.madeAt}`);
+        constrain(termOf(before.binding), termOf(after.binding), `처음은 끝이었다 at t${fixed.madeAt}`, fixed.sentence);
       }
     }
   };
 
-  const beginIteration = (current: Scope) => {
-    current.start = new Map(bindings);
-    current.written = new Set();
+  const beginIteration = (s: Scope) => {
+    s.start = new Map(current);
+    s.written = new Set();
   };
 
   const leaveInnermost = () => {
@@ -283,75 +307,102 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     effects.push({ kind: "leave", anchor: (cycle.anchor as Pose).position });
   };
 
-  const forward: Instruction = { op: "nop" };
-
-  const arithmetic = (name: string, amount: Operand, sign: 1n | -1n) => {
-    const left = bound(name);
-    const right = read(amount);
-    if (left.kind === "concrete" && right.kind === "concrete") {
-      if (left.value.kind !== "int") throw new RuntimeFault(`'${name}' must be an integer, not text`);
-      if (right.value.kind !== "int") throw new RuntimeFault("the amount must be an integer, not text");
-      assign(name, { kind: "concrete", value: { kind: "int", value: left.value.value + sign * right.value.value } });
-      return;
+  // A value the present needs now. An open symbol cannot be waited for: space never
+  // waits for time, so the run stops here, UNRESOLVED.
+  const needNow = (values: readonly Value[], purpose: string): ConcreteValue[] => {
+    const open = [...new Set(values.flatMap((v) => (v.kind === "symbolic" ? pendingLabels(v.term) : [])))];
+    if (open.length > 0) {
+      effects.push({ kind: "unresolved", symbols: open });
+      halt("UNRESOLVED", `${purpose} needs ${open.join(", ")}, which only the future could decide`);
+      throw new Stopped();
     }
-    try {
-      const term = store.arithmetic(termOf(left), termOf(right), sign);
-      assign(name, { kind: "symbolic", term });
-    } catch (error) {
-      if (error instanceof TermError) throw new RuntimeFault(error.message);
-      throw error;
-    }
+    return values.map((v) => {
+      const settled = settle(v);
+      if (settled.kind !== "concrete") throw new Error("a settled value with no open symbols must be concrete");
+      return settled.value;
+    });
   };
 
-  const execute = (operation: Operation | Act, pose: Pose): Instruction => {
-    switch (operation.op) {
-      case "assign":
-        assign(operation.name, read(operation.value));
+  const env: EvalEnv = {
+    load: (noun) => bound(noun),
+    anchor: (noun: NounId, moment: Moment) => (moment === "start" ? settle(atStart(noun)) : fromEnd(noun)),
+    arithmetic: (left, right, sign) => {
+      if (left.kind === "concrete" && right.kind === "concrete") {
+        if (left.value.kind !== "int" || right.value.kind !== "int") throw new Error("arithmetic on a non-Int; the type checker should have caught this");
+        return concrete({ kind: "int", value: left.value.value + sign * right.value.value });
+      }
+      try {
+        return { kind: "symbolic", term: store.arithmetic(termOf(left), termOf(right), sign) };
+      } catch (error) {
+        if (error instanceof TermError) throw new RuntimeFault(error.message);
+        throw error;
+      }
+    },
+    effect: (callee: CallableId, args) => {
+      if (callee !== PRINTLN) throw new Error(`no runtime support for ${callee}`);
+      const value = settle(args[0] as Value);
+      if (value.kind === "concrete") {
+        const text = renderValue(value.value);
+        lines.push({ text, term: null, heldSince: null });
+        effects.push({ kind: "say", line: text });
+      } else {
+        // The line is written now, but only the future can say what it reads.
+        lines.push({ text: null, term: value.term, heldSince: now });
+        store.noteUse(value.term, now);
+        effects.push({ kind: "hold", term: store.format(value.term) });
+      }
+      return concrete(UNIT);
+    },
+    now: (value, purpose) => needNow([value], purpose)[0] as ConcreteValue,
+  };
+
+  const forward: Instruction = { op: "nop" };
+
+  const condition = (e: Expr): boolean => {
+    // A comparison reports both sides; it needs both of them now.
+    const comparison = e.node === "Eq" ? { eq: e, negated: false } : e.node === "Not" && e.operand.node === "Eq" ? { eq: e.operand, negated: true } : null;
+    if (comparison) {
+      const [left, right] = needNow([evaluate(comparison.eq.left, env), evaluate(comparison.eq.right, env)], "this condition");
+      const holds = sameValue(left as ConcreteValue, right as ConcreteValue) !== comparison.negated;
+      effects.push({ kind: "test", left: left as ConcreteValue, right: right as ConcreteValue, negated: comparison.negated, holds });
+      return holds;
+    }
+    const [value] = needNow([evaluate(e, env)], "this condition");
+    const holds = value?.kind === "bool" && value.value;
+    effects.push({ kind: "condition", holds });
+    return holds;
+  };
+
+  const execute = (stmt: Stmt, pose: Pose): Instruction => {
+    switch (stmt.node) {
+      case "StoreNoun":
+        assign(stmt.noun, evaluate(stmt.value, env));
         return forward;
-      case "declare": {
-        const term = store.declare(operation.name, now);
-        bindings.set(operation.name, { kind: "symbolic", term });
-        markWritten(operation.name);
-        effects.push({ kind: "declare", name: operation.name, symbol: store.format(term) });
+      case "Eval":
+        evaluate(stmt.expr, env);
+        return forward;
+      case "TemporalDeclare": {
+        const term = store.declare(nameOf(stmt.noun), now);
+        define(stmt.noun, { kind: "symbolic", term });
+        effects.push({ kind: "declare", name: nameOf(stmt.noun), symbol: store.format(term) });
         return forward;
       }
-      case "add":
-        arithmetic(operation.name, operation.amount, 1n);
-        return forward;
-      case "subtract":
-        arithmetic(operation.name, operation.amount, -1n);
-        return forward;
-      case "say": {
-        const value = read(operation.value);
-        if (value.kind === "concrete") {
-          const text = renderValue(value.value);
-          lines.push({ text, term: null, heldSince: null });
-          effects.push({ kind: "say", line: text });
-        } else {
-          // The line is written now, but only the future can say what it reads.
-          lines.push({ text: null, term: value.term, heldSince: now });
-          store.noteUse(value.term, now);
-          effects.push({ kind: "hold", term: store.format(value.term) });
-        }
-        return forward;
-      }
-      case "receive": {
-        // A channel opens: the name takes a value that something later will send back.
-        const symbol = store.declare(operation.name, now, "다음");
+      case "TemporalReceive": {
+        // A channel opens: the noun takes a value that something later will send back.
+        const symbol = store.declare(nameOf(stmt.noun), now, "다음");
         slotCount += 1;
-        const slot: Slot = { id: `S${slotCount}`, name: operation.name, symbol, openedAt: now };
-        slots.set(operation.name, [...(slots.get(operation.name) ?? []), slot]);
-        bindings.set(operation.name, { kind: "symbolic", term: symbol });
-        markWritten(operation.name);
-        effects.push({ kind: "open", slot: slot.id, name: operation.name, symbol: store.format(symbol) });
+        const slot: Slot = { id: `S${slotCount}`, noun: stmt.noun, symbol, openedAt: now };
+        slots.set(stmt.noun, [...(slots.get(stmt.noun) ?? []), slot]);
+        define(stmt.noun, { kind: "symbolic", term: symbol });
+        effects.push({ kind: "open", slot: slot.id, name: nameOf(stmt.noun), symbol: store.format(symbol) });
         return forward;
       }
-      case "send": {
-        const slot = slots.get(operation.name)?.pop();
-        const sent = recorded(operation.name);
+      case "TemporalSend": {
+        const slot = slots.get(stmt.noun)?.pop();
+        const sent = recorded(stmt.noun);
         if (!slot) {
-          effects.push({ kind: "contradiction", reason: `nothing earlier is waiting for '${operation.name}'` });
-          halt("PARADOX", `[${sentence}] cannot hold: no past is listening for '${operation.name}'`);
+          effects.push({ kind: "contradiction", reason: `nothing earlier is waiting for '${nameOf(stmt.noun)}'` });
+          halt("PARADOX", `[${sentence}] cannot hold: no past is listening for '${nameOf(stmt.noun)}'`);
           return forward;
         }
         const selfLoop = noteLoop(slot.symbol, termOf(sent), `channel ${slot.id}`);
@@ -359,9 +410,13 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
         constrain(slot.symbol, termOf(sent), `channel ${slot.id}`, sentence);
         return forward;
       }
-      case "move":
-        return operation.instruction;
-      case "anchor": {
+      case "Move":
+        return { op: "step", relative: stmt.relative };
+      case "Turn":
+        return stmt.turn ? { op: "turn", turn: stmt.turn } : { op: "face", compass: stmt.compass as NonNullable<typeof stmt.compass> };
+      case "FloorMove":
+        return { op: "floor", delta: stmt.delta };
+      case "Anchor": {
         const open = cycles.findIndex((cycle) => cycle.anchor && sameCoordinate(cycle.anchor.position, pose.position));
         if (open >= 0) {
           while (cycles.length > open + 1) leaveInnermost();
@@ -378,14 +433,14 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
         }
         return forward;
       }
-      case "back": {
+      case "BackEdge": {
         const cycle = cycles[cycles.length - 1];
         if (!cycle) throw new RuntimeFault("'끝은 처음이다' with no open '여기가 처음이다' to return to");
         endIteration(cycle);
         effects.push({ kind: "back", to: (cycle.anchor as Pose).position });
         return { op: "jump", to: cycle.anchor as Pose };
       }
-      case "end": {
+      case "End": {
         while (cycles.length > 0 && !stop) leaveInnermost();
         endIteration(run);
         effects.push({ kind: "end" });
@@ -400,54 +455,44 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
         }
         return { op: "end" };
       }
-      case "when": {
-        const left = read(operation.test.left);
-        const right = read(operation.test.right);
-        if (left.kind === "symbolic" || right.kind === "symbolic") {
-          // Space never waits for time: a branch needs a value now.
-          const symbols = [
-            ...new Set([...(left.kind === "symbolic" ? pendingLabels(left.term) : []), ...(right.kind === "symbolic" ? pendingLabels(right.term) : [])]),
-          ];
-          effects.push({ kind: "unresolved", symbols });
-          halt("UNRESOLVED", `this condition needs ${symbols.join(", ")}, which only the future could decide`);
-          return forward;
-        }
-        const holds = sameValue(left.value, right.value) !== operation.test.negated;
-        effects.push({ kind: "test", left: left.value, right: right.value, negated: operation.test.negated, holds });
-        if (holds) return execute(operation.then, pose);
-        if (operation.then.op === "back") leaveInnermost();
+      case "Branch": {
+        if (condition(stmt.condition)) return execute(stmt.then, pose);
+        if (stmt.then.node === "BackEdge") leaveInnermost();
         return forward;
       }
-      case "assert": {
-        const left = operation.at === "start" ? atStart(operation.name) : recorded(operation.name);
-        constrain(termOf(left), termOf(readRecorded(operation.value)), operation.at === "start" ? "past, at 처음" : "past", sentence);
+      case "TemporalAssert": {
+        const left = stmt.moment === "start" ? atStart(stmt.noun) : recorded(stmt.noun);
+        // A noun on the right keeps its symbolic identity, so the constraint says what it is about.
+        const right = stmt.value.node === "LoadNoun" ? recorded(stmt.value.noun) : evaluate(stmt.value, env);
+        constrain(termOf(left), termOf(right), stmt.moment === "start" ? "past, at 처음" : "past", sentence);
         return forward;
       }
-      case "promise": {
-        const current = scope();
-        const term = termOf(read(operation.value));
-        effects.push({ kind: "promise", name: operation.name, term: store.format(term), due: dueLabel(current) });
-        current.promises.push({ name: operation.name, term, madeAt: now, sentence });
+      case "TemporalPromise": {
+        const s = scope();
+        const term = termOf(evaluate(stmt.value, env));
+        effects.push({ kind: "promise", name: nameOf(stmt.noun), term: store.format(term), due: dueLabel(s) });
+        s.promises.push({ noun: stmt.noun, term, madeAt: now, sentence });
         return forward;
       }
-      case "fixed": {
-        const current = scope();
-        if (!current.anchor) throw new RuntimeFault("'처음은 끝이었다' needs an open '여기가 처음이다' whose start it can compare with");
-        current.fixed.push({ madeAt: now, sentence });
-        effects.push({ kind: "fixed", due: dueLabel(current) });
+      case "TemporalFixedPoint": {
+        const s = scope();
+        if (!s.anchor) throw new RuntimeFault("'처음은 끝이었다' needs an open '여기가 처음이다' whose start it can compare with");
+        s.fixed.push({ madeAt: now, sentence });
+        effects.push({ kind: "fixed", due: dueLabel(s) });
         return forward;
       }
     }
   };
 
-  const decode = (text: string, pose: Pose): DecodeResult => {
-    const operation = program.operations.get(coordinateKey(pose.position));
-    if (!operation) return { error: "this cell was not compiled" };
-    sentence = text;
+  const decode = (_text: string, pose: Pose): DecodeResult => {
+    const stmt = program.cells.get(coordinateKey(pose.position));
+    if (!stmt) return { error: "this cell was not compiled" };
+    sentence = stmt.at.source;
     try {
-      return execute(operation, pose);
+      return execute(stmt, pose);
     } catch (error) {
       if (error instanceof RuntimeFault) return { error: error.message };
+      if (error instanceof Stopped) return forward;
       throw error;
     }
   };
@@ -471,9 +516,9 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     : (state.outcome as ProgramOutcome);
 
   const values = new Map<string, ConcreteValue>();
-  for (const [name, binding] of bindings) {
-    const settled = settle(binding);
-    if (settled.kind === "concrete") values.set(name, settled.value);
+  for (const [noun, v] of current) {
+    const settled = settle(v.binding);
+    if (settled.kind === "concrete") values.set(nameOf(noun), settled.value);
   }
   const summarize = (info: SymbolInfo): SymbolSummary => ({
     label: info.label,
@@ -485,12 +530,17 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     loop: info.selfLoop,
     mark: info.value && info.selfLoop ? "SELF_CAUSED" : info.retroactive ? "RETRO" : null,
   });
+  const describe = (binding: Binding): string => {
+    const settled = settle(binding);
+    return settled.kind === "concrete" ? renderValue(settled.value) : store.format(settled.term);
+  };
 
   return {
     outcome,
     output: lines.map((line) => line.text ?? "?"),
     values,
     symbols: store.all().map(summarize),
+    versions: history.map((v) => ({ noun: nameOf(v.noun), index: v.index, definedAt: v.definedAt, value: describe(v.binding), uses: [...v.uses] })),
     trace,
   };
 }

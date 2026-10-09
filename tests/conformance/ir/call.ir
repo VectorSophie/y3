@@ -1,0 +1,10 @@
+(0,0,0) 4:1  StoreNoun 값#1 ← -7 : Int
+(0,1,0) 5:1  StoreNoun 크기#2 ← Call std.math.abs(값#1 : Int) : Int
+(0,2,0) 6:1  Eval Call std.io.println(크기#2 : Int) : Unit
+(0,3,0) 7:1  StoreNoun 큰것#3 ← Call std.math.max(크기#2 : Int, 10 : Int) : Int
+(0,4,0) 8:1  Eval Call std.io.println(큰것#3 : Int) : Unit
+(0,5,0) 9:1  End
+nouns:
+  값#1 : Int
+  크기#2 : Int
+  큰것#3 : Int

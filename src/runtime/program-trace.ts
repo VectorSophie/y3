@@ -1,5 +1,5 @@
 import { orientationLabel } from "../space/orientation";
-import { showValue } from "../semantics/operations";
+import { showValue } from "../semantics/values";
 import type { Effect, ProgramResult, ProgramTraceEntry, SymbolSummary } from "./interpreter";
 import { describeProgramOutcome } from "./program-outcome";
 
@@ -29,6 +29,8 @@ export function describeEffect(effect: Effect): string {
       return `out ${JSON.stringify(effect.line)}`;
     case "test":
       return `test ${showValue(effect.left)} ${effect.negated ? "≠" : "="} ${showValue(effect.right)}: ${effect.holds ? "yes" : "no"}`;
+    case "condition":
+      return `condition: ${effect.holds ? "yes" : "no"}`;
     case "anchor":
       return `처음 ${at(effect.at)} #${effect.iteration}`;
     case "back":

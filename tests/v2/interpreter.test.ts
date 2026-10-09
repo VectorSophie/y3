@@ -34,22 +34,17 @@ describe("values", () => {
     expect(result.values.get("값")).toEqual({ kind: "int", value: 9007199254740994n });
   });
 
-  it("compare by kind and value: the integer 3 is not the text 3", () => {
-    const result = run(
-      `⟦
-[값은 "3"이다.]            [ ]
-[값이 3이면 왼쪽을 본다.]  [끝이다.]
-["다르다"를 말한다.]       [ ]
-[끝이다.]                  [ ]
-⟧`,
-    );
-    expect(result.output).toEqual(["다르다"]);
+  it("never compare an integer with text: Eq<T> needs one T, checked before the run (M5)", () => {
+    const { compiled } = compile(column('값은 "3"이다.', "값이 3이면 왼쪽을 본다.", "끝이다."));
+    expect(compiled.program).toBeNull();
+    expect(compiled.diagnostics.map((d) => d.message)).toEqual(["[값이 3이면 왼쪽을 본다.] cannot compare Text with Int"]);
   });
 
-  it("fault on arithmetic with text", () => {
-    const result = run(column('값은 "셋"이다.', "값에 1을 더한다.", "끝이다."));
-    expect(result.outcome).toMatchObject({ status: "FAULT", steps: 1, at: { x: 0, y: 1, z: 0 } });
-    expect(result.outcome.status === "FAULT" && result.outcome.message).toMatch(/integer/);
+  it("refuse arithmetic on text before the run, not as a fault in it (M5)", () => {
+    const { compiled } = compile(column('값은 "셋"이다.', "값에 1을 더한다.", "끝이다."));
+    expect(compiled.program).toBeNull();
+    expect(compiled.diagnostics.map((d) => d.code)).toContain("Y3Y001");
+    expect(compiled.diagnostics[0]?.message).toBe("[값에 1을 더한다.] a value in arithmetic must be Int, not Text");
   });
 
   it("fault when a noun is read before this run gave it a value", () => {
@@ -153,8 +148,17 @@ describe("layering", () => {
     expect(readdirSync(dir)).toContain("interpreter.ts");
   });
 
-  it("keeps the semantic layer free of the Korean parser's internals", () => {
-    const source = readFileSync(join(__dirname, "..", "..", "src", "semantics", "operations.ts"), "utf8");
-    expect(source).not.toMatch(/language\//);
+  it("keeps the IR, the type checker and the runtime free of the Korean parser (M5)", () => {
+    const root = join(__dirname, "..", "..", "src");
+    for (const dir of ["ir", "types", "runtime"]) {
+      for (const file of readdirSync(join(root, dir))) {
+        const source = readFileSync(join(root, dir, file), "utf8");
+        const imports = [...source.matchAll(/from "([^"]+)"/g)].map((m) => m[1] ?? "");
+        for (const path of imports) {
+          // Spans and diagnostics are shared; sentences, particles and tense are not.
+          expect(/language\/(sentence|korean|document-parser)/.test(path), `${dir}/${file} imports ${path}`).toBe(false);
+        }
+      }
+    }
   });
 });

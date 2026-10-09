@@ -69,7 +69,7 @@ function printError(error: unknown): never {
 
 const cli = new Command();
 
-cli.name("y3").description("YI3ANG tooling: v2 document commands (check, fmt, unpack, pack) and the v1 interpreter (validate, run, trace)").version("0.1.0");
+cli.name("y3").description("YI3ANG tooling: v2 document commands (check, ir, fmt, unpack, pack) and the v1 interpreter (validate, run, trace)").version("0.1.0");
 
 cli
   .command("validate")

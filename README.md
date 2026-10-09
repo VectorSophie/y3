@@ -95,6 +95,24 @@ name at the start or end of an iteration. A value can cause itself:
 This prints `0`: the only number that survives being doubled on its way back to its own
 past (β = 2β). With nothing to pin it the same loop is `AMBIGUOUS` (β = β), and with
 `+ 1` on the way it is a `PARADOX` (β = β + 1).
+
+**M5** adds a typed semantic core (`docs/v2-typed-core.md`). Sentences become a typed,
+language-neutral IR before anything runs, and the runtime executes only that IR. Types
+are `Int`, `Text`, `Bool` (`참`, `거짓`) and `Unit`, plus `Option`/`Result` at the IR
+level, and are inferred locally with no annotations and no implicit conversions. Explicit
+calls use a colon:
+
+```
+⟦
+[값은 -7이다.]
+[크기는 수학 절댓값: 값]
+[표준 줄출력: 크기]
+[끝이다.]
+⟧
+```
+
+`y3 check` refuses a mistyped program before it runs. `y3 ir` prints the typed IR, with
+the cell each statement came from.
 `run` and `trace` choose v1 or v2 from the file: v2 documents contain planes. The
 sections below describe v1, whose examples are in `examples/v1/`; v2 examples are in
 `examples/v2/`.
@@ -208,3 +226,4 @@ The IDE includes:
 - `docs/v2-present-tense.md` (the M2 sentence set)
 - `docs/v2-temporal-core.md` (M3: 미정, 였다, 일 것이다; the solver model)
 - `docs/v2-temporal-cycles.md` (M4: channels, fixed points, time anchors, self-caused values)
+- `docs/v2-typed-core.md` (M5: types, the typed IR, semantic versions, ADTs, colon calls)
