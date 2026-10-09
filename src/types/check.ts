@@ -21,6 +21,7 @@ export const TYPE_CODES = {
   NOT_TEMPORAL: "Y3Y004",
   NOT_EXHAUSTIVE: "Y3Y005",
   UNKNOWN: "Y3Y006",
+  DUPLICATE_BINDING: "Y3Y007",
 } as const;
 
 type TemporalUse = { readonly noun: NounId; readonly at: Provenance; readonly what: string };
@@ -261,9 +262,17 @@ export class TypeChecker {
     switch (p.kind) {
       case "wildcard":
         return;
-      case "bind":
-        this.locals[this.locals.length - 1]?.set(p.local, type);
+      case "bind": {
+        // Each arm has its own scope, so a name already in it was bound by this same
+        // pattern. Repeating a name is refused, not read as an equality test.
+        const scope = this.locals[this.locals.length - 1];
+        if (scope?.has(p.local)) {
+          this.report(TYPE_CODES.DUPLICATE_BINDING, at, `'${p.local}' is bound twice in one pattern; each name may be bound once`);
+          return;
+        }
+        scope?.set(p.local, type);
         return;
+      }
       case "literal":
         this.expect(type, this.literalType(p.value, at), at, "a pattern");
         return;

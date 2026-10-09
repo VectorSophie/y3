@@ -11,7 +11,9 @@ import {
   int,
   INT,
   loadDocument,
+  matchPattern,
   named,
+  param,
   parseSentence,
   runProgram,
   SENTENCE_CODES,
@@ -331,6 +333,57 @@ describe("algebraic data types", () => {
     expect(typecheck(z, table).errors).toEqual(["Y3Y006 '점' has no field 'z'; it has x, y"]);
     const destructure = match(point, [{ kind: "record", type: "점", fields: [bind("a"), { kind: "wildcard" }] }, local("a")]);
     expect(typecheck(destructure, table)).toEqual({ type: "Int", errors: [] });
+  });
+
+  describe("bind each name once per pattern", () => {
+    const pairs = () => {
+      const table = new TypeTable();
+      table.define({ kind: "sum", name: "Pair", params: ["A", "B"], variants: [{ name: "Pair", fields: [param("A"), param("B")] }] });
+      return table;
+    };
+    const pair = (...fields: Pattern[]): Pattern => ({ kind: "variant", type: "Pair", variant: "Pair", fields });
+
+    it("accepts distinct names: Some(x), Pair(x, y)", () => {
+      expect(typecheck(match(make("Option", "Some", lit(int(1n))), [some(bind("x")), local("x")], [none, lit(int(0n))])).errors).toEqual([]);
+      const both = match(make("Pair", "Pair", lit(int(1n)), lit(int(2n))), [pair(bind("x"), bind("y")), local("y")]);
+      expect(typecheck(both, pairs())).toEqual({ type: "Int", errors: [] });
+    });
+
+    it("refuses the same name twice in one variant pattern: Pair(x, x)", () => {
+      const twice = match(make("Pair", "Pair", lit(int(1n)), lit(int(2n))), [pair(bind("x"), bind("x")), local("x")]);
+      expect(typecheck(twice, pairs()).errors).toEqual(["Y3Y007 'x' is bound twice in one pattern; each name may be bound once"]);
+    });
+
+    it("keeps the first binding's type rather than letting the second replace it", () => {
+      const body = local("x");
+      const mixed = match(make("Pair", "Pair", lit(int(1n)), lit(text("둘"))), [pair(bind("x"), bind("x")), body]);
+      expect(typecheck(mixed, pairs()).errors).toEqual(["Y3Y007 'x' is bound twice in one pattern; each name may be bound once"]);
+      expect(formatType(body.type)).toBe("Int"); // x is the Int field, never the Text one
+    });
+
+    it("refuses the same name twice in a nested pattern: Pair(Some(x), x)", () => {
+      const nested = match(make("Pair", "Pair", make("Option", "Some", lit(int(1n))), lit(int(2n))), [pair(some(bind("x")), bind("x")), local("x")], [{ kind: "wildcard" }, lit(int(0n))]);
+      expect(typecheck(nested, pairs()).errors).toEqual(["Y3Y007 'x' is bound twice in one pattern; each name may be bound once"]);
+      const record = new TypeTable();
+      record.define({ kind: "product", name: "점", params: [], fields: [{ name: "x", type: INT }, { name: "y", type: INT }] });
+      const inRecord = match(make("점", null, lit(int(1n)), lit(int(2n))), [{ kind: "record", type: "점", fields: [bind("a"), bind("a")] }, local("a")]);
+      expect(typecheck(inRecord, record).errors).toEqual(["Y3Y007 'a' is bound twice in one pattern; each name may be bound once"]);
+    });
+
+    it("allows the same name in separate arms, and an inner match to shadow an outer one", () => {
+      const arms = match(make("Pair", "Pair", lit(int(1n)), lit(int(2n))), [pair(bind("x"), { kind: "literal", value: int(0n) }), local("x")], [pair({ kind: "wildcard" }, bind("x")), local("x")]);
+      expect(typecheck(arms, pairs())).toEqual({ type: "Int", errors: [] });
+      expect(value(arms)).toEqual(int(2n)); // the second arm matched, with its own x
+      const inner = match(make("Option", "Some", lit(int(7n))), [some(bind("x")), match(make("Option", "Some", local("x")), [some(bind("x")), local("x")], [none, lit(int(0n))])], [none, lit(int(0n))]);
+      expect(typecheck(inner)).toEqual({ type: "Int", errors: [] });
+      expect(value(inner)).toEqual(int(7n));
+    });
+
+    it("is an invariant of the runtime matcher too, for HIR that skipped the checker", () => {
+      const v: ConcreteValue = { kind: "data", type: "Pair", variant: "Pair", fields: [int(1n), int(2n)] };
+      expect(() => matchPattern(pair(bind("x"), bind("x")), v)).toThrow(/bound twice/);
+      expect(matchPattern(pair(bind("x"), bind("y")), v, new Map([["x", int(9n)]]))).toEqual(new Map([["x", int(1n)], ["y", int(2n)]]));
+    });
   });
 
   it("nest: Result<Option<Int>, Text>", () => {

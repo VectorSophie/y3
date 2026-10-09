@@ -151,6 +151,12 @@ chooses an arm by pattern. The patterns are:
 - a variant with sub-patterns;
 - a record with sub-patterns.
 
+A name may be bound only once in a pattern: `Pair(x, y)` is valid, `Pair(x, x)` is
+refused (`Y3Y007`), and a repeated name is never read as an equality test. The same
+name may be reused in different arms, and an inner match may shadow an outer binding.
+The checker enforces this on any HIR, wherever it came from; the runtime matcher treats
+a duplicate as a broken invariant.
+
 The checker requires every match to be exhaustive. It must have a catch-all arm, or
 cover every variant of a sum, or cover both `참` and `거짓`. It also requires all arms
 to share one type.
@@ -195,6 +201,7 @@ gives them surface syntax without changing the IR or the checker.
 | `Y3Y004` | a temporal value that is not Int or Text |
 | `Y3Y005` | a match that is not exhaustive |
 | `Y3Y006` | unknown type, variant, field or local |
+| `Y3Y007` | a name bound twice in one pattern |
 | `Y3G012` | a malformed call |
 
 ## What changed for existing programs

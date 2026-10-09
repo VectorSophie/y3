@@ -23,27 +23,34 @@ export interface EvalEnv {
 
 export const concrete = (value: ConcreteValue): Value => ({ kind: "concrete", value });
 
-// Matches a value against a pattern, collecting bound locals; null when it does not match.
+// Matches a value against a pattern, collecting bound locals; null when it does not
+// match. `bound` may start with the enclosing locals, which a pattern can shadow; a name
+// bound twice by the same pattern is an invariant violation the checker rejects.
 export function matchPattern(pattern: Pattern, value: ConcreteValue, bound: Map<string, ConcreteValue> = new Map()): Map<string, ConcreteValue> | null {
-  switch (pattern.kind) {
-    case "wildcard":
-      return bound;
-    case "bind":
-      bound.set(pattern.local, value);
-      return bound;
-    case "literal":
-      return sameValue(pattern.value, value) ? bound : null;
-    case "variant":
-    case "record": {
-      if (value.kind !== "data" || value.type !== pattern.type) return null;
-      if (pattern.kind === "variant" && value.variant !== pattern.variant) return null;
-      for (let i = 0; i < pattern.fields.length; i += 1) {
-        const field = value.fields[i];
-        if (!field || !matchPattern(pattern.fields[i] as Pattern, field, bound)) return null;
+  const seen = new Set<string>();
+  const go = (p: Pattern, v: ConcreteValue): boolean => {
+    switch (p.kind) {
+      case "wildcard":
+        return true;
+      case "bind":
+        if (seen.has(p.local)) throw new Error(`'${p.local}' is bound twice in one pattern; the type checker should have caught this`);
+        seen.add(p.local);
+        bound.set(p.local, v);
+        return true;
+      case "literal":
+        return sameValue(p.value, v);
+      case "variant":
+      case "record": {
+        if (v.kind !== "data" || v.type !== p.type) return false;
+        if (p.kind === "variant" && v.variant !== p.variant) return false;
+        return p.fields.every((sub, i) => {
+          const field = v.fields[i];
+          return field !== undefined && go(sub, field);
+        });
       }
-      return bound;
     }
-  }
+  };
+  return go(pattern, value) ? bound : null;
 }
 
 export function evaluate(e: Expr, env: EvalEnv, locals: ReadonlyMap<string, ConcreteValue> = new Map()): Value {
