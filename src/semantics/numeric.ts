@@ -1,4 +1,4 @@
-import { float, int, type ConcreteValue } from "./values";
+import { float, formatFloat, int, type ConcreteValue } from "./values";
 import { integerRange, isFloat, isInteger, type NumericName, type Type } from "../types/types";
 import { RuntimeFault } from "./fault";
 
@@ -78,10 +78,15 @@ export function convert(target: NumericName, value: ConcreteValue): ConcreteValu
     if (value.kind === "int") return float(Number(width === 32 ? roundToBits(value.value, 24) : value.value), width);
     throw new Error("a number was expected; the type checker should have caught this");
   }
-  if (value.kind === "int") return fit(target, value.value, () => `${value.value} as ${target}`);
+  const exact = (n: bigint, shown: string) => {
+    const range = isInteger(target) ? integerRange(target) : null;
+    if (range && (n < range.min || n > range.max)) throw new NumericFault(`cannot convert ${shown} to ${target}: outside ${range.min} … ${range.max}`);
+    return int(n);
+  };
+  if (value.kind === "int") return exact(value.value, String(value.value));
   if (value.kind === "float") {
-    if (!Number.isFinite(value.value)) throw new NumericFault(`cannot convert ${value.value} to ${target}`);
-    return fit(target, BigInt(Math.trunc(value.value)), () => `${value.value} as ${target}`);
+    if (!Number.isFinite(value.value)) throw new NumericFault(`cannot convert ${formatFloat(value.value, value.width)} to ${target}`);
+    return exact(BigInt(Math.trunc(value.value)), formatFloat(value.value, value.width));
   }
   throw new Error("a number was expected; the type checker should have caught this");
 }

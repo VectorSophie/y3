@@ -8,6 +8,7 @@ import { named, param, type Kind, type Type } from "../types/types";
 export const T = param("T");
 export const K = param("K");
 export const V = param("V");
+export const E = param("E");
 export const option = (t: Type) => named("Option", t);
 export const result = (t: Type, e: Type) => named("Result", t, e);
 export const listOf = (t: Type) => named("List", t);

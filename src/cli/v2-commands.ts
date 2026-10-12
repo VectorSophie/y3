@@ -5,6 +5,7 @@ import { loadDocument } from "../container/document";
 import { compileProgram, type ModuleResolver } from "../semantics/program";
 import { runProgram } from "../runtime/interpreter";
 import { formatProgramTrace } from "../runtime/program-trace";
+import { nodeHost } from "./node-host";
 import { formatCompiledIr } from "../ir/print";
 import { describeProgramOutcome, PROGRAM_EXIT_CODES } from "../runtime/program-outcome";
 import { packDocument, unpackDocument, type FileMap } from "../container/pack";
@@ -56,19 +57,17 @@ function compileOrExit(filePath: string, source?: string) {
 }
 
 export function runV2(filePath: string, source: string, options: { maxSteps?: number; input?: string; trace: boolean }): void {
-  if (options.input !== undefined) {
-    fatal("v2 programs do not read input yet (듣는다 is not part of the present-tense core)");
-  }
   const { program, manifest } = compileOrExit(filePath, source);
   if (program.space.layers.length === 0) {
     fatal(`${filePath} is a library module: it has callable planes and types but no volume to run`);
   }
-  const result = runProgram(program, manifest, { maxSteps: options.maxSteps });
+  // Output is written as the program commits it; a trace prints the run instead.
+  const host = nodeHost({ stdin: options.input, write: options.trace ? () => {} : undefined });
+  const result = runProgram(program, manifest, { maxSteps: options.maxSteps, host });
   if (options.trace) {
     process.stdout.write(formatProgramTrace(result));
-  } else {
-    for (const line of result.output) process.stdout.write(`${line}\n`);
-    if (result.outcome.status !== "HALT") console.error(describeProgramOutcome(result.outcome));
+  } else if (result.outcome.status !== "HALT") {
+    console.error(describeProgramOutcome(result.outcome));
   }
   process.exitCode = PROGRAM_EXIT_CODES[result.outcome.status];
 }

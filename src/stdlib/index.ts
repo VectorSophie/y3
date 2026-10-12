@@ -6,7 +6,8 @@ import { FS } from "./fs";
 import { IO } from "./io";
 import { MATH } from "./math";
 import { TEXT_LIBRARY } from "./text";
+import { CHOICE } from "./choice";
 
 // Every built-in callable. Spelling in source: '<namespace> <name>' in Korean; identity:
 // a stable id such as std.io.println.
-export const STANDARD_LIBRARY: readonly Callable[] = [...IO, ...TEXT_LIBRARY, ...MATH, ...CONVERT, ...LISTS, ...MAPS, ...SETS, ...FS, ...CLOCK];
+export const STANDARD_LIBRARY: readonly Callable[] = [...IO, ...TEXT_LIBRARY, ...MATH, ...CONVERT, ...LISTS, ...MAPS, ...SETS, ...FS, ...CLOCK, ...CHOICE];
