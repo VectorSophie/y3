@@ -177,6 +177,8 @@ export class EditorServices {
       if (this.model.getModule(this.model.moduleOfDocument(document)).imports.some((i) => i.alias === stem)) return { kind: "module", document, alias: stem };
       const ctor = this.constructors(document).get(stem);
       if (ctor) return ctor.kind === "product" ? { kind: "type", document, name: stem } : { kind: "variant", document, type: ctor.name, name: stem };
+      const builtinCtor = BUILTIN_CONSTRUCTORS.get(stem);
+      if (builtinCtor) return builtinCtor.variant ? { kind: "variant", document, type: builtinCtor.typeName, name: stem } : { kind: "type", document, name: stem };
       for (const def of program?.types ?? []) if (def.kind === "product" && def.fields.some((f) => f.name === stem)) return { kind: "field", document, type: def.name, name: stem };
     }
     return null;
@@ -760,7 +762,11 @@ function renameNoun(ast: SentenceAst, from: string, to: string, isConstructor: (
 // `[from: …]` in its own module, `[alias from: …]` from an importer.
 function renameCallee(ast: SentenceAst, alias: string | null, from: string, to: string): SentenceAst {
   const callee = (path: readonly string[]) => (alias === null ? (path.length === 1 && path[0] === from ? [to] : path) : path.length === 2 && path[0] === alias && path[1] === from ? [alias, to] : path);
-  const call = (c: CallAst): CallAst => ({ ...c, readings: c.readings.map((r) => ({ ...r, callee: callee(r.callee) })) });
+  // The readings of a call head are alternative parses of the same words: when one of
+  // them means this callee, the word is renamed in all of them.
+  const means = (path: readonly string[]) => callee(path) !== path;
+  const call = (c: CallAst): CallAst =>
+    c.readings.some((r) => means(r.callee)) ? { ...c, readings: c.readings.map((r) => ({ ...r, callee: r.callee[r.callee.length - 1] === from ? [...r.callee.slice(0, -1), to] : r.callee })) } : c;
   const pattern = (p: PatternAst): PatternAst => (p.kind === "name" ? { ...p, path: callee(p.path), args: p.args?.map(pattern) ?? null } : p);
   switch (ast.kind) {
     case "call":

@@ -423,3 +423,78 @@ describe("raw text, formatting and persistence", () => {
     expect(() => next.open({ text, sidecar: "Y3MODEL 2\n{}" })).toThrow(/version 1/);
   });
 });
+
+describe("adversarial cases", () => {
+  it("undo after several dependent edits walks back through each, exactly", () => {
+    const { model, floor } = open();
+    const states = [snapshot(model)];
+    const row = model.apply({ kind: "InsertRow", plane: floor, y: 3 }).created[0] as CellId;
+    states.push(snapshot(model));
+    model.apply({ kind: "EditSentence", cell: row, sentence: "z는 9이다." });
+    states.push(snapshot(model));
+    model.apply({ kind: "SwapCells", a: row, b: model.cellAt(floor, 0, 0) as CellId });
+    states.push(snapshot(model));
+    for (let i = states.length - 2; i >= 0; i -= 1) {
+      model.undo();
+      expect(snapshot(model)).toEqual(states[i]);
+    }
+    expect(model.hasCell(row)).toBe(false);
+  });
+
+  it("VOID becomes blank geometry only as a whole row or column: new cells, new ids", () => {
+    const { model, floor, ok } = open();
+    const created = model.apply([0, 1, 2].map((y) => ({ kind: "InsertCell" as const, plane: floor, x: 2, y, sentence: null }))).created;
+    expect(created.map((c) => model.getCell(c as CellId).blank)).toEqual([true, true, true]);
+    expect(model.getPlane(floor).width).toBe(3);
+    expect(() => model.apply({ kind: "InsertCell", plane: floor, x: 3, y: 0, sentence: null })).toThrow(/hole/);
+    ok();
+  });
+
+  it("a cell moved between planes keeps its id, and its HIR follows into the other body", () => {
+    const { model, doc, at } = open();
+    const callable = model.getDocument(doc).planes.find((p) => model.getPlane(p).kind === "callable") as PlaneId;
+    const cell = at(1, 0);
+    const blanks = model.apply([
+      { kind: "EditSentence", cell, sentence: "q는 5이다." },
+      { kind: "InsertColumn", plane: callable, x: 1 },
+    ]).created;
+    model.apply({ kind: "SwapCells", a: cell, b: blanks[0] as CellId });
+    expect(model.getCell(cell)).toMatchObject({ plane: callable, x: 1, y: 0 });
+    const hir = model.hirNodesForCell(cell);
+    expect(hir[0]?.kind).toBe("StoreNoun");
+    expect(hir[0]?.item.at.plane.name).toBe("두배");
+    expect(model.diagnostics(doc).filter((d) => d.severity === "error")).toEqual([]);
+    expect(modelViolations(model)).toEqual([]);
+  });
+
+  it("extracting a floor with a loop anchor (여기가 처음이다) changes nothing the program does", () => {
+    const text = "⟦\n[i는 0이다.]\n[여기가 처음이다.]\n[i에 1을 더한다.]\n[i가 3보다 작으면 끝은 처음이다.]\n[i를 말한다.]\n[끝이다.]\n⟧\n";
+    const { model, doc } = open(text);
+    const before = model.run(doc).result;
+    model.apply({ kind: "ExtractNamedPlane", document: doc, z: 0, name: "고리" });
+    const after = model.run(doc).result;
+    expect(after.output).toEqual(["3"]);
+    expect(after.trace.map((t) => t.ids?.cell)).toEqual(before.trace.map((t) => t.ids?.cell));
+  });
+
+  it("a raw replacement in a resized plane never hands an old id to a different sentence", () => {
+    const { model, doc } = open("⟦\n[a는 1이다.] [b는 2이다.]\n[끝이다.] [ ]\n⟧\n");
+    const floor = model.getDocument(doc).floors[0] as PlaneId;
+    const [a, b] = [model.cellAt(floor, 0, 0), model.cellAt(floor, 1, 0)];
+    model.setText(doc, "⟦\n[c는 3이다.] [b는 2이다.] [d는 4이다.]\n[끝이다.] [ ] [ ]\n⟧\n");
+    const now = model.getDocument(doc).floors[0] as PlaneId;
+    expect(model.cellAt(now, 1, 0)).toBe(b); // same sentence, same place
+    expect(model.cellAt(now, 0, 0)).not.toBe(a); // another sentence, in a plane of another size
+    expect(model.hasCell(a as CellId)).toBe(false);
+    expect(modelViolations(model)).toEqual([]);
+  });
+
+  it("an identical sentence written twice is not guessed: duplicates get new ids when they move", () => {
+    const { model, doc } = open("⟦\n[x는 1이다.] [x는 1이다.]\n[끝이다.] [ ]\n⟧\n");
+    const floor = model.getDocument(doc).floors[0] as PlaneId;
+    const [a, b] = [model.cellAt(floor, 0, 0), model.cellAt(floor, 1, 0)];
+    model.setText(doc, "⟦\n[ ] [ ] [x는 1이다.] [x는 1이다.]\n[끝이다.] [ ] [ ] [ ]\n⟧\n");
+    const now = model.getDocument(doc).floors[0] as PlaneId;
+    expect([model.cellAt(now, 2, 0), model.cellAt(now, 3, 0)].some((c) => c === a || c === b)).toBe(false);
+  });
+});
