@@ -52,3 +52,6 @@ export * from "./temporal/graph";
 export * from "./compiler/optimize";
 export * from "./tools/doc";
 export * from "./format/canonical";
+export * from "./tools/sha256";
+export * from "./tools/replay";
+export * from "./runtime/payload";

@@ -1,6 +1,7 @@
 import type { Coordinate, Pose } from "../space/manifest";
 import type { EffectContext, HostEvent } from "../ir/callables";
-import { memoryHost, type Host } from "../stdlib/host";
+import { memoryHost, type Capability, type Host } from "../stdlib/host";
+import { decodePayload, encodePayload } from "./payload";
 import type { Moment, NounId } from "../ir/hir";
 import type { Body, CompiledProgram, Procedure } from "../ir/program";
 import { renderValue, sameValue, showValue, UNIT, type ConcreteValue } from "../semantics/values";
@@ -175,7 +176,15 @@ function at(c: Coordinate): string {
 // Where a call starts: the callable plane's first cell, facing 남, up 위.
 export const CALL_ENTRY: Pose = { position: { x: 0, y: 0, z: 0 }, orientation: { forward: "south", up: "up" } };
 
-export type RunOptions = { readonly maxSteps?: number; readonly host?: Host };
+// replay: the events of a recorded run. Effects then return their recorded results
+// instead of acting, and stdout must match what was recorded (docs/v2-replay.md).
+export type RunOptions = { readonly maxSteps?: number; readonly host?: Host; readonly replay?: readonly HostEvent[] };
+
+// Effects that change the outside world; every other built-in effect only observes it.
+const CHANGES_THE_WORLD = new Set(["std.fs.write", "std.fs.append", "std.fs.create", "std.fs.close"]);
+
+// A replayed run did something the recording did not: replay cannot continue honestly.
+export class ReplayDivergence extends Error {}
 
 export type Runtime = ReturnType<typeof createRuntime>;
 
@@ -196,8 +205,16 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
       const w = writes[committed] as Write;
       if (w.text === null && !all) return;
       const text = (w.text ?? "?") + (w.newline ? "\n" : "");
+      if (replay) {
+        // Replaying: stdout must be exactly what the recording saw, in the same place.
+        const expected = replay.events[replay.next];
+        if (!expected || expected.source !== "std.io.stdout" || expected.payload !== JSON.stringify(text)) {
+          throw new ReplayDivergence(`replay diverged at step ${now}: the program wrote ${JSON.stringify(text)}, but the recording has ${expected ? `${expected.source} ${expected.value}` : "nothing more"}`);
+        }
+        replay.next += 1;
+      }
       host.write(text);
-      events.push({ step: now, source: "std.io.stdout", value: JSON.stringify(text) });
+      events.push({ step: now, at: lastAt, frame: frame.label, source: "std.io.stdout", kind: "output", args: [], value: JSON.stringify(text), payload: JSON.stringify(text) });
       committed += 1;
     }
   };
@@ -227,6 +244,55 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
   const born = (term: SymbolicTerm, noun: NounId) => {
     const info = store.info(symbolsOf(term)[0] as number);
     graph.symbols.push({ label: info.label, origin: info.origin, noun: nameOf(noun), born: now, frame: frame.label });
+  };
+
+  // ---- The one path every external effect takes, whichever engine runs the program.
+  //   1. the effect barrier: never ahead of output still held on an open symbol;
+  //   2. the host's capabilities: a denied one is the callable's ordinary error, or FAULT;
+  //   3. record or replay: replaying takes the recorded result instead of acting;
+  //   4. the event: committed now, in program order.
+  const replay = options.replay ? { events: options.replay, next: 0 } : null;
+  type External = {
+    readonly source: string;
+    readonly label: string;
+    readonly capability: Capability;
+    readonly kind: HostEvent["kind"];
+    readonly args: readonly ConcreteValue[];
+    readonly redact: boolean;
+    readonly denied?: () => ConcreteValue;
+    readonly perform: () => ConcreteValue;
+  };
+  const external = (e: External): ConcreteValue => {
+    if (committed < writes.length) {
+      const open = [...new Set(writes.slice(committed).flatMap((w) => (w.text === null && w.term ? pendingLabels(w.term) : [])))];
+      effects.push({ kind: "unresolved", symbols: open });
+      halt("UNRESOLVED", `${e.label} cannot run while earlier output is held on ${open.join(", ")}: an effect never overtakes held output`);
+      throw new Stopped();
+    }
+    let result: ConcreteValue;
+    if (replay) {
+      const expected = replay.events[replay.next];
+      if (!expected || expected.source !== e.source) {
+        throw new ReplayDivergence(`replay diverged at step ${now}: the program calls ${e.source}, but the recording has ${expected ? expected.source : "nothing more"}`);
+      }
+      replay.next += 1;
+      result = decodePayload(expected.payload);
+    } else if (host.capabilities?.[e.capability] === false) {
+      if (!e.denied) throw new RuntimeFault(`${e.label} needs the '${e.capability}' capability, which the host denies`);
+      result = e.denied();
+    } else {
+      try {
+        result = e.perform();
+      } catch (error) {
+        if (error instanceof RuntimeFault) throw error;
+        // The host itself broke (not an ordinary error the program can handle).
+        throw new RuntimeFault(`${e.label} failed in the host: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const shown = e.redact && result.kind === "data" && result.variant === "Ok" && result.fields[0]?.kind === "text" ? `Ok(<${new TextEncoder().encode(result.fields[0].value).length} bytes>)` : showValue(result);
+    events.push({ step: now, at: lastAt, frame: frame.label, source: e.source, kind: e.kind, args: e.args.map(showValue), value: shown, payload: encodePayload(result) });
+    effects.push({ kind: "effect", source: e.source, value: shown });
+    return result;
   };
 
   const halt = (status: TemporalStatus, message: string) => {
@@ -465,27 +531,17 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
       }
       commit();
     },
-    effect: (target, args, types) => {
-      // An effect barrier: output held on an open symbol was written before this
-      // effect, so this effect may not reach the outside world first. Stop here,
-      // before anything is committed, rather than reorder what the world observes.
-      if (committed < writes.length) {
-        const open = [...new Set(writes.slice(committed).flatMap((w) => (w.text === null && w.term ? pendingLabels(w.term) : [])))];
-        effects.push({ kind: "unresolved", symbols: open });
-        halt("UNRESOLVED", `'${target.namespace} ${target.name}' cannot run while earlier output is held on ${open.join(", ")}: an effect never overtakes held output`);
-        throw new Stopped();
-      }
-      try {
-        const result = target.perform(args, effectContext, types);
-        events.push({ step: now, source: target.id, value: showValue(result) });
-        effects.push({ kind: "effect", source: target.id, value: showValue(result) });
-        return result;
-      } catch (error) {
-        if (error instanceof RuntimeFault) throw error;
-        // The host itself broke (not an ordinary error the program can handle).
-        throw new RuntimeFault(`'${target.namespace} ${target.name}' failed in the host: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
+    effect: (target, args, types) =>
+      external({
+        source: target.id,
+        label: `'${target.namespace} ${target.name}'`,
+        capability: target.capability,
+        kind: CHANGES_THE_WORLD.has(target.id) ? "effect" : "input",
+        args,
+        redact: target.redact === true,
+        denied: target.denied,
+        perform: () => target.perform(args, effectContext, types),
+      }),
     now: (value, purpose) => needNow([value], purpose)[0] as ConcreteValue,
   };
 
@@ -693,6 +749,9 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
 
     // The run is over: whatever is still held is written as "?".
     commit(true);
+    if (replay && replay.next < replay.events.length) {
+      throw new ReplayDivergence(`replay diverged: the run ended with ${replay.events.length - replay.next} recorded effect(s) still to come (next: ${replay.events[replay.next]?.source})`);
+    }
     const stdout = writes.map((w) => (w.text ?? "?") + (w.newline ? "\n" : "")).join("");
     const output = stdout === "" ? [] : (stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout).split("\n");
 

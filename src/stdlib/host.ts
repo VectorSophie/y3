@@ -5,7 +5,14 @@
 export type FsErrorKind = "NotFound" | "PermissionDenied" | "AlreadyExists" | "IsDirectory" | "Other";
 export type FsResult<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly kind: FsErrorKind; readonly message: string };
 
+// What a host can offer a program. A host may deny any of them: the browser, say, has no
+// filesystem. A denied capability is reported at the call that needed it.
+export type Capability = "stdin" | "filesystem" | "clock" | "ffi";
+export const CAPABILITIES: readonly Capability[] = ["stdin", "filesystem", "clock", "ffi"];
+
 export interface Host {
+  // Absent or true: provided. false: denied.
+  readonly capabilities?: Partial<Record<Capability, boolean>>;
   // Standard output: what is written here is committed; it is never taken back.
   write(text: string): void;
   // Standard input. A line without its line break, or the next whitespace-separated
@@ -64,7 +71,7 @@ export class InputReader {
 // A host with no outside world: stdin from a string, files in a map, a fixed clock.
 export type MemoryHost = Host & { readonly stdout: string[]; readonly files: Map<string, Uint8Array<ArrayBufferLike>> };
 
-export function memoryHost(options: { stdin?: string; files?: Record<string, string>; now?: bigint } = {}): MemoryHost {
+export function memoryHost(options: { stdin?: string; files?: Record<string, string>; now?: bigint; deny?: readonly Capability[] } = {}): MemoryHost {
   let stdin: string | null = options.stdin ?? "";
   const reader = new InputReader(() => {
     const chunk = stdin;
@@ -77,6 +84,7 @@ export function memoryHost(options: { stdin?: string; files?: Record<string, str
   let ticks = 0n;
   const missing = (path: string) => ({ ok: false, kind: "NotFound", message: `no such file: ${path}` }) as const;
   return {
+    capabilities: Object.fromEntries((options.deny ?? []).map((c) => [c, false])),
     stdout,
     files,
     write: (text) => stdout.push(text),

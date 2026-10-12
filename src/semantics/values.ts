@@ -24,7 +24,7 @@ export type ConcreteValue =
   | { readonly kind: "set"; readonly entries: ReadonlyMap<string, ConcreteValue> }
   // A handle on something outside the program (an open file). Copying the handle does
   // not copy the file: a handle is the one value that refers rather than contains.
-  | { readonly kind: "resource"; readonly resource: "file"; readonly id: number };
+  | { readonly kind: "resource"; readonly resource: "file" | "foreign"; readonly id: number };
 
 export const UNIT: ConcreteValue = { kind: "unit" };
 

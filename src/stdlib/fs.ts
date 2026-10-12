@@ -43,6 +43,9 @@ export const FS = namespace("std.fs", "파일", {
     "읽기",
     {
       kind: "effect",
+      redact: true,
+      capability: "filesystem",
+      denied: () => failure("PermissionDenied", "the host denies filesystem access"),
       signature: { params: [TEXT], result: result(TEXT, FS_ERROR) },
       perform: ([path], ctx) => {
         const r = ctx.host.readFile(asText(path));
@@ -52,12 +55,16 @@ export const FS = namespace("std.fs", "파일", {
   ],
   write: [
     "쓰기",
-    { kind: "effect", signature: { params: [TEXT, TEXT], result: result(UNIT_TYPE, FS_ERROR) }, perform: ([path, body], ctx) => wrap(ctx.host.writeFile(asText(path), encoder.encode(asText(body))), () => UNIT) },
+    { kind: "effect",
+      capability: "filesystem",
+      denied: () => failure("PermissionDenied", "the host denies filesystem access"),
+      signature: { params: [TEXT, TEXT], result: result(UNIT_TYPE, FS_ERROR) }, perform: ([path, body], ctx) => wrap(ctx.host.writeFile(asText(path), encoder.encode(asText(body))), () => UNIT) },
   ],
   exists: [
     "존재",
     {
       kind: "effect",
+      capability: "filesystem",
       signature: { params: [TEXT], result: BOOL },
       perform: ([path], ctx) => {
         const found = ctx.host.stat(asText(path)).ok;
@@ -69,6 +76,8 @@ export const FS = namespace("std.fs", "파일", {
     "정보",
     {
       kind: "effect",
+      capability: "filesystem",
+      denied: () => failure("PermissionDenied", "the host denies filesystem access"),
       signature: { params: [TEXT], result: result(named("FileInfo"), FS_ERROR) },
       perform: ([path], ctx) => {
         const r = ctx.host.stat(asText(path));
@@ -80,6 +89,8 @@ export const FS = namespace("std.fs", "파일", {
     "열기",
     {
       kind: "effect",
+      capability: "filesystem",
+      denied: () => failure("PermissionDenied", "the host denies filesystem access"),
       signature: { params: [TEXT], result: result(FILE, FS_ERROR) },
       // An existing file, for reading and appending.
       perform: ([path], ctx) => {
@@ -94,6 +105,8 @@ export const FS = namespace("std.fs", "파일", {
     "만들기",
     {
       kind: "effect",
+      capability: "filesystem",
+      denied: () => failure("PermissionDenied", "the host denies filesystem access"),
       signature: { params: [TEXT], result: result(FILE, FS_ERROR) },
       // A new, empty file (an existing one is emptied).
       perform: ([path], ctx) => {
@@ -106,6 +119,9 @@ export const FS = namespace("std.fs", "파일", {
     "내용",
     {
       kind: "effect",
+      redact: true,
+      capability: "filesystem",
+      denied: () => failure("PermissionDenied", "the host denies filesystem access"),
       signature: { params: [FILE], result: result(TEXT, FS_ERROR) },
       perform: ([file], ctx) => {
         const h = handle(ctx, file);
@@ -119,6 +135,8 @@ export const FS = namespace("std.fs", "파일", {
     "덧쓰기",
     {
       kind: "effect",
+      capability: "filesystem",
+      denied: () => failure("PermissionDenied", "the host denies filesystem access"),
       signature: { params: [FILE, TEXT], result: result(UNIT_TYPE, FS_ERROR) },
       perform: ([file, body], ctx) => {
         const h = handle(ctx, file);
@@ -130,6 +148,8 @@ export const FS = namespace("std.fs", "파일", {
     "닫기",
     {
       kind: "effect",
+      capability: "filesystem",
+      denied: () => failure("PermissionDenied", "the host denies filesystem access"),
       signature: { params: [FILE], result: result(UNIT_TYPE, FS_ERROR) },
       perform: ([file], ctx) => {
         const h = handle(ctx, file);

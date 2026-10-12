@@ -46,6 +46,7 @@ export const IO = namespace("std.io", "표준", {
     "줄읽기",
     {
       kind: "effect",
+      capability: "stdin",
       signature: { params: [], result: option(TEXT) },
       perform: (_args, ctx) => {
         const line = ctx.host.readLine();
@@ -57,6 +58,7 @@ export const IO = namespace("std.io", "표준", {
     "낱말읽기",
     {
       kind: "effect",
+      capability: "stdin",
       signature: { params: [], result: option(TEXT) },
       perform: (_args, ctx) => {
         const token = ctx.host.readToken();
