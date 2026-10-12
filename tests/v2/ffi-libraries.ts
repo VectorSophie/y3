@@ -86,3 +86,32 @@ export const BAD_ALLOC = encodeModule({
     { export: "count", type: t([i32, i32], [i32]), body: I.localGet(1) },
   ],
 });
+
+// One static object: thing* get_same() always returns the same non-null pointer, so
+// after free_same() an allocator "reuses" the address. int use_same(thing*) reads it.
+export const SAME = encodeModule({
+  memory: { pages: 1 },
+  functions: [
+    { export: "get_same", type: t([], [i32]), body: I.i32(64) },
+    { export: "use_same", type: t([i32], [i32]), body: [...I.localGet(0), ...I.i32Load] },
+    { export: "free_same", type: t([i32], []), body: [] },
+    { export: "free_two", type: t([i32, i32], []), body: [] },
+  ],
+});
+
+// Counts live allocations: int outstanding(); void fill_trap(uint8_t*, size_t) traps
+// after its out-buffer was allocated.
+export const COUNTING = encodeModule({
+  memory: { pages: 1, export: "memory" },
+  globals: [
+    { type: i32, mutable: true, init: I.i32(1024) },
+    { type: i32, mutable: true, init: I.i32(0) },
+  ],
+  functions: [
+    { export: "y3_alloc", type: t([i32], [i32]), body: [...I.globalGet(1), ...I.i32(1), ADD, ...I.globalSet(1), ...I.globalGet(0), ...I.globalGet(0), ...I.localGet(0), ADD, ...I.globalSet(0)] },
+    { export: "y3_free", type: t([i32, i32], []), body: [...I.globalGet(1), ...I.i32(1), 0x6b, ...I.globalSet(1)] },
+    { export: "fill_trap", type: t([i32, i32], []), body: [0x00] },
+    { export: "fill_ok", type: t([i32, i32], []), body: [] },
+    { export: "outstanding", type: t([], [i32]), body: I.globalGet(1) },
+  ],
+});

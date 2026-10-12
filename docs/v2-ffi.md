@@ -40,8 +40,9 @@ any call (`types/check.ts`, `ForeignCall`). There is no `unsafe` block.
   only on its arguments. A pure call is not an effect barrier and leaves no event. Nothing
   infers purity. A pure function cannot take, return or free a `Foreign` pointer, because
   pointers are state.
-- `해제` (free): the call frees its `Foreign` argument. After it returns, that handle is
-  dead.
+- `해제` (free): the call frees its `Foreign` argument. A free function takes **exactly
+  one** `Foreign` parameter, so the resource it consumes is never ambiguous (a second one
+  is refused at build time and in bytecode). After it returns, that resource is dead.
 - Only the program's own module declares foreign libraries and functions. An imported
   module that does is an error (`Y3C012`).
 
@@ -103,13 +104,22 @@ or an edited artifact therefore fails before any foreign code runs.
 
 - **Borrowed buffers.** For `Text`, `[u8; N]`, `[]u8` and out-buffers, the runtime
   allocates in the library's memory with `y3_alloc`, copies the bytes in, makes the call,
-  and frees with `y3_free` afterwards, whatever happened. The foreign side may read them
-  only during the call. An out-buffer's bytes are copied out before it is freed.
+  and frees with `y3_free` afterwards, whatever happened: returned or trapped. The foreign
+  side may read them only during the call. An out-buffer's bytes are copied to the Y3
+  side right after a successful call, before every buffer is freed.
   `y3_alloc` returning 0 or a region outside memory is a FAULT.
 - **Foreign pointers.** A pointer returned as `Foreign` becomes a handle in the run's
-  handle table: `{ library, address, freed }`. Y3 sees `<foreign #n>`, an opaque value.
-- **Freeing.** A `해제` function frees its handle. Before any call, every handle argument
-  is checked: issued by this run, from this library, not freed. A second free or any use
+  handle table: `{ library, address, generation, freed }`. Y3 sees `<foreign #n>`, an
+  opaque value; the address is never visible.
+- **Identity is the resource, not the return.** A foreign resource is
+  `(library, address, generation)` (`ForeignRuntime.issue`):
+  - the same library returning an address that is already live gives back the **same**
+    handle, so two calls returning one pointer give equal values;
+  - an address returned again after it was freed is a **new generation** with a new
+    handle; the old handle stays dead even though the allocator reused the address.
+- **Freeing.** A `해제` function frees its one handle; the resource is dead for every Y3
+  value carrying that handle. Before any call, every handle argument is checked: issued
+  by this run, from this library, not freed. A second free (through any alias) or any use
   after free is a FAULT before foreign code runs (`ForeignRuntime.address`).
 
 ## Handles

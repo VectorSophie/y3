@@ -84,7 +84,11 @@ export function checkDecl(d: ForeignDecl): void {
   }
   if (d.result.kind === "scalar" && !FFI_SCALARS.includes(d.result.type)) fail(`'${String(d.result.type)}' does not cross the FFI boundary`);
   if (d.pure && (d.frees || d.result.kind === "handle" || d.params.some((p) => p.kind === "handle"))) fail("a 순수 (pure) function cannot take, return or free a Foreign pointer: pointers are state");
-  if (d.frees && !d.params.some((p) => p.kind === "handle")) fail("a 해제 (free) function takes the Foreign pointer it frees");
+  // 해제 consumes exactly one resource, so the declaration must say which: until there is
+  // syntax to name it, a free function takes exactly one Foreign pointer.
+  const handles = d.params.filter((p) => p.kind === "handle").length;
+  if (d.frees && handles === 0) fail("a 해제 (free) function takes the Foreign pointer it frees");
+  if (d.frees && handles > 1) fail(`a 해제 (free) function takes exactly one Foreign pointer, not ${handles}: which one it frees would be ambiguous`);
   if (d.frees && d.result.kind === "handle") fail("a 해제 (free) function cannot return a pointer");
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(d.symbol)) fail(`'${d.symbol}' is not a C symbol`);
 }
@@ -124,11 +128,33 @@ export function checkLibrary(bytes: Uint8Array, alias: string, decls: readonly F
 
 // ---- Calls, for one run.
 
-type Handle = { readonly library: string; readonly address: number; freed: boolean };
+// A foreign resource: one (library, address) for one stretch of life. The handle id Y3
+// sees names the resource, not the call that returned it. An address returned again
+// while live is the same resource, the same id; returned again after it was freed, it
+// is a new generation with a new id, so a stale alias never comes back to life.
+type Handle = { readonly library: string; readonly address: number; readonly generation: number; freed: boolean };
 
 export class ForeignRuntime {
   private readonly instances = new Map<string, WebAssembly.Instance>();
   private readonly handles: Handle[] = [];
+  private readonly live = new Map<string, number>(); // "library address" → id, while live
+  private readonly generations = new Map<string, number>(); // "library address" → last generation
+
+  private issue(library: string, address: number): number {
+    const key = `${library} ${address}`;
+    const known = this.live.get(key);
+    if (known !== undefined) return known;
+    const generation = (this.generations.get(key) ?? 0) + 1;
+    this.generations.set(key, generation);
+    this.handles.push({ library, address, generation, freed: false });
+    this.live.set(key, this.handles.length - 1);
+    return this.handles.length - 1;
+  }
+
+  private release(h: Handle): void {
+    h.freed = true;
+    this.live.delete(`${h.library} ${h.address}`);
+  }
 
   constructor(
     private readonly libraries: ReadonlyMap<string, ForeignLibrary>,
@@ -181,7 +207,7 @@ export class ForeignRuntime {
       const v = args[next++] as ConcreteValue;
       if (p.kind === "handle") {
         const address = this.address(d, v);
-        if (d.frees && freed.length === 0) freed.push(this.handles[(v as { id: number }).id] as Handle);
+        if (d.frees) freed.push(this.handles[(v as { id: number }).id] as Handle); // exactly one (checkDecl)
         return { p, v, address };
       }
       return { p, v };
@@ -193,7 +219,7 @@ export class ForeignRuntime {
     const alloc = exports.y3_alloc as ((n: number) => number) | undefined;
     const free = exports.y3_free as ((p: number, n: number) => void) | undefined;
     const borrowed: { ptr: number; len: number }[] = [];
-    let out: { ptr: number; len: number } | null = null;
+    let out: { ptr: number; len: number } | undefined;
     const lend = (bytes: Uint8Array) => {
       const ptr = (alloc as (n: number) => number)(bytes.length) >>> 0;
       const mem = new Uint8Array((memory as WebAssembly.Memory).buffer);
@@ -203,6 +229,7 @@ export class ForeignRuntime {
       return [ptr, bytes.length];
     };
     let raw: unknown;
+    let written: Uint8Array | null = null;
     try {
       const wasmArgs = plan.flatMap((x) => {
         const { p, v } = x;
@@ -223,27 +250,27 @@ export class ForeignRuntime {
         }
       });
       raw = fn(...wasmArgs);
+      // An out-buffer's bytes are copied out before it is freed with the others.
+      const o = out as { ptr: number; len: number } | undefined; // set inside the plan's closure
+      if (o) written = new Uint8Array((memory as WebAssembly.Memory).buffer).slice(o.ptr, o.ptr + o.len);
     } catch (e) {
       if (e instanceof RuntimeFault) throw e;
       // A trap (unreachable, out-of-bounds memory) inside foreign code.
       throw new RuntimeFault(`${label} trapped in foreign code: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      for (const b of borrowed) if (b !== out) free?.(b.ptr, b.len);
+      // Every runtime-owned buffer, out-buffer included, whether the call returned or trapped.
+      for (const b of borrowed) free?.(b.ptr, b.len);
     }
-    for (const h of freed) h.freed = true;
+    for (const h of freed) this.release(h);
     const r = d.result;
     if (r.kind === "unit") return UNIT;
     if (r.kind === "scalar") return fromWasm(label, r.type, raw);
     if (r.kind === "handle") {
       const address = (raw as number) >>> 0;
       if (address === 0) throw new RuntimeFault(`${label} returned a null pointer where a Foreign pointer was declared`);
-      this.handles.push({ library: d.library, address, freed: false });
-      return { kind: "resource", resource: "foreign", id: this.handles.length - 1 };
+      return { kind: "resource", resource: "foreign", id: this.issue(d.library, address) };
     }
-    const o = out as unknown as { ptr: number; len: number };
-    const bytes = new Uint8Array((memory as WebAssembly.Memory).buffer).slice(o.ptr, o.ptr + o.len);
-    free?.(o.ptr, o.len);
-    return { kind: "array", elements: [...bytes].map((b) => int(BigInt(b))) };
+    return { kind: "array", elements: [...(written ?? [])].map((b) => int(BigInt(b))) };
   }
 }
 

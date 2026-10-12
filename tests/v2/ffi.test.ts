@@ -23,12 +23,12 @@ import {
   type ProgramResult,
 } from "../../src/v2";
 import { observable } from "./compile-helpers";
-import { BAD_ALLOC, BUFFERS, IMPORTS, MATH } from "./ffi-libraries";
+import { BAD_ALLOC, BUFFERS, COUNTING, IMPORTS, MATH, SAME } from "./ffi-libraries";
 
 // M9 FFI (docs/v2-ffi.md): 외부 declarations, the C ABI over wasm32, pointers as opaque
 // handles, and every way the boundary can be misused.
 
-const LIBS: Record<string, Uint8Array> = { "math.wasm": MATH, "buf.wasm": BUFFERS, "imports.wasm": IMPORTS, "bad.wasm": BAD_ALLOC };
+const LIBS: Record<string, Uint8Array> = { "math.wasm": MATH, "buf.wasm": BUFFERS, "imports.wasm": IMPORTS, "bad.wasm": BAD_ALLOC, "same.wasm": SAME, "counting.wasm": COUNTING };
 
 const DECLS = [
   "외부 씨 더하기 (a: i32, b: i32) → i32 = add",
@@ -52,9 +52,12 @@ const DECLS = [
   "외부 버 다음 (c: Foreign) → i32 = next",
   "외부 버 해방 (c: Foreign) = free_counter 해제",
   "외부 버 거친 (n: i32) → i32 = wild",
+  "외부 같 얻기 () → Foreign = get_same",
+  "외부 같 쓰기 (p: Foreign) → i32 = use_same",
+  "외부 같 놓기 (p: Foreign) = free_same 해제",
 ];
 
-const source = (cells: string[], decls = DECLS, foreign = '"씨" = "math.wasm"\n"버" = "buf.wasm"') =>
+const source = (cells: string[], decls = DECLS, foreign = '"씨" = "math.wasm"\n"버" = "buf.wasm"\n"같" = "same.wasm"') =>
   `+++\n[foreign]\n${foreign}\n+++\n⟦\n${cells.map((c) => `[${c}]`).join("\n")}\n⟧\n\n※\n\n${decls.join("\n")}\n`;
 
 function compile(cells: string[], decls = DECLS, foreign?: string, libs = LIBS): { program: CompiledProgram; manifest: Manifest } | { errors: string[] } {
@@ -172,6 +175,24 @@ describe("FFI: buffers and pointers", () => {
     ]);
   });
 
+  it("a pointer returned twice while live is one resource, one identity", () => {
+    expect(out(["a는 같 얻기:", "b는 같 얻기:", 'a가 b이면 "같다"를 말한다.', "a를 말한다.", "b를 말한다."])).toEqual(["같다", "<foreign #0>", "<foreign #0>"]);
+  });
+
+  it("freeing through one alias invalidates every alias, before foreign code runs", () => {
+    expect(fault(["a는 같 얻기:", "b는 같 얻기:", "같 놓기: a", "x는 같 쓰기: b"])).toMatch(/Foreign pointer #0 was already freed/);
+    const r = run(["a는 같 얻기:", "b는 같 얻기:", "같 놓기: a", "같 놓기: b", "끝이다."]);
+    expect(r.outcome).toMatchObject({ status: "FAULT", message: expect.stringMatching(/already freed/) });
+    expect(r.events.map((e) => e.source)).toEqual(["foreign.같.얻기", "foreign.같.얻기", "foreign.같.놓기"]); // the second free never ran
+  });
+
+  it("an address reused after a free is a new generation: the stale alias stays dead", () => {
+    const r = run(["a는 같 얻기:", "같 놓기: a", "b는 같 얻기:", 'a가 b이면 "같다"를 말한다.', "b를 말한다.", "y는 같 쓰기: b", "x는 같 쓰기: a", "끝이다."]);
+    expect(r.output).toEqual(["<foreign #1>"]);
+    expect(r.outcome).toMatchObject({ status: "FAULT", message: expect.stringMatching(/Foreign pointer #0 was already freed/) });
+    expect(r.events.filter((e) => e.source === "foreign.같.쓰기").map((e) => e.resource)).toEqual(["foreign#1"]);
+  });
+
   it("use after free and double free are FAULTs before foreign code runs", () => {
     expect(fault(["c는 버 새계수기:", "버 해방: c", "a는 버 다음: c"])).toMatch(/Foreign pointer #0 was already freed/);
     expect(fault(["c는 버 새계수기:", "버 해방: c", "버 해방: c"])).toMatch(/already freed/);
@@ -229,6 +250,10 @@ describe("FFI: malformed declarations and libraries are refused at build time", 
     expect(errors(["끝이다."], [], '"씨" = "../../etc/lib.wasm"').join("\n")).toMatch(/leaves the project/);
     expect(errors(["끝이다."], [], '"씨" = "/usr/lib/x.wasm"').join("\n")).toMatch(/leaves the project/);
     expect(errors(["끝이다."], [], '"표준" = "math.wasm"').join("\n")).toMatch(/cannot name a foreign library/);
+  });
+
+  it("해제 takes exactly one Foreign pointer, so what it frees is never ambiguous", () => {
+    expect(one("외부 같 둘놓기 (a: Foreign, b: Foreign) = free_two 해제", '"같" = "same.wasm"')).toMatch(/takes exactly one Foreign pointer, not 2/);
   });
 
   it("a library that takes buffers must export its allocator and memory", () => {
@@ -335,6 +360,7 @@ describe("FFI: hostile bytecode", () => {
     expect(tamper((m) => (m.foreign.find((d: any) => d.name === "다음").pure = true))).toThrow(/순수 \(pure\) function cannot take/);
     expect(tamper((m) => (m.foreign.find((d: any) => d.name === "더하기").frees = true))).toThrow(/takes the Foreign pointer it frees/);
     expect(tamper((m) => (m.foreign.find((d: any) => d.name === "더하기").library = "없음"))).toThrow();
+    expect(tamper((m) => (m.foreign.find((d: any) => d.name === "해방").params = [{ kind: "handle" }, { kind: "handle" }]))).toThrow(/exactly one Foreign pointer, not 2/);
     expect(tamper((m) => (m.foreign.find((d: any) => d.name === "더하기").params[0] = { kind: "scalar", type: "i128" }))).toThrow(/malformed FFI parameter/);
   });
 });
@@ -360,5 +386,25 @@ describe("FFI: the CLI loads libraries only from inside the project", () => {
     expect(load(`../${outside.split("/").pop()}/evil.wasm`)).toBeNull();
     expect(load(join(outside, "evil.wasm"))).toBeNull();
     expect(load("libs")).toBeNull();
+  });
+});
+
+import { ForeignRuntime, RuntimeFault, sha256, type ForeignDecl } from "../../src/v2";
+
+describe("FFI: runtime-owned buffers are freed exactly", () => {
+  const decl = (name: string, symbol: string, params: ForeignDecl["params"], result: ForeignDecl["result"]): ForeignDecl => ({ id: `카.${name}`, library: "카", name, symbol, params, result, pure: false, frees: false });
+  const decls = [decl("채우기", "fill_ok", [{ kind: "out", length: 8 }], { kind: "out", length: 8 }), decl("함정", "fill_trap", [{ kind: "out", length: 8 }], { kind: "out", length: 8 }), decl("남은", "outstanding", [], { kind: "scalar", type: "i32" })];
+  const runtime = () => new ForeignRuntime(new Map([["카", { alias: "카", path: "c.wasm", sha256: sha256(COUNTING) }]]), new Map(decls.map((d) => [d.id, d])), () => COUNTING);
+
+  it("an out-buffer is freed after a successful call, its bytes kept on the Y3 side", () => {
+    const f = runtime();
+    expect(f.call("카.채우기", [])).toMatchObject({ kind: "array" });
+    expect(f.call("카.남은", [])).toEqual({ kind: "int", value: 0n });
+  });
+
+  it("an out-buffer is freed when the foreign function traps", () => {
+    const f = runtime();
+    expect(() => f.call("카.함정", [])).toThrow(RuntimeFault);
+    expect(f.call("카.남은", [])).toEqual({ kind: "int", value: 0n });
   });
 });

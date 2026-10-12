@@ -29,8 +29,11 @@ statically; checked arithmetic and bounds checks prove it dynamically.
 reaches only through an opaque handle the runtime issued: an open `File` (M7) or a
 `Foreign` pointer returned by foreign code (M9). Sockets and processes come later.
 A handle:
-- has an **identity**: the runtime's handle number. Two handles are equal only if they
-  are the same handle, never because they look alike.
+- has an **identity**: the runtime's handle number, which names the *resource*, not the
+  call that returned it. A foreign resource is `(library, address, generation)`: the
+  same live pointer returned twice is the same handle, and an address reused after a
+  free is a new generation with a new handle. Two handles are equal only if they are the
+  same handle, never because they look alike.
 - has **no constructor**. Safe code, the type checker and the bytecode verifier allow no
   way to make one from an integer or a constant.
 - is never a key, never part of a constant, and never temporal (`bigint`/`Text` only).
@@ -171,7 +174,7 @@ meaning is not changed in place: a v1 artifact is refused with "rebuild from sou
 | use after close / free, double free | files: `Err(Closed)` (M7); foreign: handles checked before every call | "use after free and double free are FAULTs" |
 | foreign results outside their type | range-checked; null pointers refused | "a result outside its declared type is an ABI violation" |
 | WASM capability escape | a compiled program imports only module `y3`; the `.wasm` must equal the compilation of its verified bytecode | `wasm.test.ts`: "code that is not the compilation of its bytecode is refused" |
-| replay tampering | header, JSON, integrity hash, program hash; every replayed result decoded defensively and checked against the effect's type; divergence stops the run | `replay.test.ts`: "refuses truncated, tampered…", "a forged log … cannot hand the program a value outside its type" |
+| replay tampering | header, JSON, integrity hash (corruption detection, not authentication), program hash; every replayed result decoded defensively and checked against the effect's type; divergence stops the run | `replay.test.ts`: "refuses truncated, tampered…", "a forged log … cannot hand the program a value outside its type" |
 | untrusted Y3BC + FFI | the three guards in `docs/v2-bytecode.md` (loader, type verifier, runtime) | `ffi.test.ts` "FFI: hostile bytecode" |
 | denied capabilities | `external` checks before acting; denied file operations return `Err(PermissionDenied)`, others FAULT | "a denied file system…", "a denied clock or stdin…", "a host that denies ffi" |
 
@@ -195,7 +198,15 @@ the barrier, capabilities or handle checks.
 
 **3. Who owns foreign memory?** Borrowed buffers: the runtime, for exactly one call
 (`y3_alloc` before, `y3_free` after, in `finally`). Pointers returned as `Foreign`: the
-library, until a `해제` call; Y3 holds only a handle (`ForeignRuntime.handles`).
+library, until a `해제` call; Y3 holds only a handle (`ForeignRuntime.handles`). A handle
+names the resource `(library, address, generation)`, not the call that returned it
+(`ForeignRuntime.issue`): a live pointer returned again is the same handle, so freeing
+through any alias kills every alias, and an address reused after a free gets a new
+generation, so a stale alias never revives. A `해제` declaration takes exactly one
+`Foreign` parameter (`checkDecl`), so which resource it consumes is never ambiguous.
+Tests: "a pointer returned twice while live is one resource", "freeing through one alias
+invalidates every alias", "an address reused after a free is a new generation", "해제
+takes exactly one Foreign pointer".
 
 **4. Can ordinary Y3 forge a pointer?** No. `Foreign` is opaque with no constructor; no
 conversion exists; the checker refuses `i64` for `Foreign` ("a Foreign value cannot be
@@ -282,3 +293,20 @@ Each was planted in a copy of the code, the M9 suites run, and the file restored
 - **Two tests were weaker than they looked** (planted bugs 4 and 8 survived the first
   run): the pointer-forgery test reused a register and was refused for the wrong reason,
   and no WASM test anchored a loop under a non-default `up`. Both were strengthened.
+- **Found in review: Foreign identity was per return, not per resource.** Two calls
+  returning the same live pointer gave two unequal handles, each freeable once, so the
+  same resource could be freed twice. Handles now name `(library, address, generation)`.
+  In the same review: `해제` with several `Foreign` parameters freed whichever came first
+  (now: exactly one is required), and an out-buffer was not freed when the foreign
+  function trapped (now freed with every other runtime-owned buffer).
+
+## Decisions after review
+
+- `순수` calls are not recorded: the declaration is already an unsafe determinism
+  contract, so replay may run them again against the pinned library.
+- Nullable pointers wait for `Option<Foreign>`; `Foreign` never holds null.
+- The VM's speed relative to the HIR interpreter is profiled separately, after M10.
+- Replay logs stay unsigned: they give deterministic replay and corruption detection,
+  not authentication.
+- Foreign declarations stay in the root module. A future design should let a dependency
+  request a foreign capability and the root package bind the actual library.

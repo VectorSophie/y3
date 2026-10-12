@@ -53,9 +53,12 @@ Y3REPLAY 1
 - **`program`** is the sha256 of the program's Y3BC artifact text, the exact bytes `y3
   build` writes. It is never a path: the same program in another directory replays; an
   edited program does not. `program.y3`, `program.y3b` and `program.wasm` share it.
-- **`integrity`** is the sha256 of the events. It catches a truncated or edited log. It is
-  not a signature: someone who edits a log can recompute it. A forged log can still only
-  feed values to effects, in order, each checked against its declared type.
+- **`integrity`** is the sha256 of the `events` array only. It detects accidental
+  corruption and editing of the event payload. It is **not authentication**: anyone who
+  edits a log can recompute it, and it does not cover the other metadata fields
+  (`toolchain`, `capabilities`; `program` is checked against the program itself). Signed
+  logs are deferred. A forged log can still only feed values to effects, in order, each
+  checked against its declared type.
 - **`capabilities`** records what the recording host offered; **`toolchain`** the toolchain
   that wrote it.
 
