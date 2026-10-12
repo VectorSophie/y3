@@ -69,3 +69,21 @@ describe("HIR interpreter = bytecode VM, on seeded random programs (property)", 
     });
   }
 });
+
+import { compileToMir, encodeBytecode, memoryHost, moduleOf, runExecutable, writeArtifact } from "../../src/v2";
+
+describe("bytecode artifact round trip = HIR interpreter, on every fixture", () => {
+  for (const { path, source } of fixtures()) {
+    it(path, () => {
+      const c = compileSource(source, path);
+      if (!c || c.program.space.layers.length === 0) return;
+      const { mir, nodes } = compileToMir(c.program, c.manifest.start);
+      const text = writeArtifact(encodeBytecode(mir, nodes, c.program, { module: "main", maxSteps: c.manifest.maxSteps, start: c.manifest.start }));
+      expect(writeArtifact(encodeBytecode(mir, nodes, c.program, { module: "main", maxSteps: c.manifest.maxSteps, start: c.manifest.start }))).toBe(text); // reproducible
+      const loaded = moduleOf(text);
+      const vm = runExecutable(loaded.executable, loaded.program, c.manifest, { host: memoryHost({ now: 42n }) });
+      const ref = runHir(c);
+      expect({ ...observable(vm), versions: undefined }).toEqual({ ...observable(ref), versions: undefined });
+    });
+  }
+});
