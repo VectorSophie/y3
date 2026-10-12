@@ -300,16 +300,19 @@ describe("FFI: hostile bytecode", () => {
 
   it("cannot forge a pointer: Foreign has no constant, and a handle id is never an integer", () => {
     expect(tamper((m) => m.constants.push({ resource: "foreign", id: 0 }))).toThrow(/malformed constant/);
-    // An i64 register handed to a Foreign parameter fails the type verifier.
-    expect(
-      tamper((m) => {
-        const block = m.blocks.find((b: any) => b.code.some((ins: any[]) => ins[2] === "버.다음"));
-        const ins = block.code.find((i: any[]) => i[2] === "버.다음");
-        const constant = m.constants.push({ int: "0" }) - 1;
-        const type = m.types.push({ kind: "prim", name: "i64" }) - 1;
-        block.code.splice(block.code.indexOf(ins), 0, [0, ins[3][0], constant, type]);
-      }),
-    ).toThrow(/Foreign/);
+    // An i64 constant, in a register of its own, handed to a Foreign parameter: the type
+    // verifier refuses it before anything runs.
+    const forged = tamper((m) => {
+      const block = m.blocks.find((b: any) => b.code.some((ins: any[]) => ins[2] === "버.다음"));
+      const ins = block.code.find((i: any[]) => i[2] === "버.다음");
+      const constant = m.constants.push({ int: "0" }) - 1;
+      const type = m.types.push({ kind: "prim", name: "i64" }) - 1;
+      const fresh = m.registers;
+      m.registers += 1;
+      block.code.splice(block.code.indexOf(ins), 0, [0, fresh, constant, type]);
+      ins[3] = [fresh];
+    });
+    expect(forged).toThrow(/argument 1 of '버.다음' .*i64/);
   });
 
   it("cannot bypass the declaration rules (pure pointers, free without pointer)", () => {

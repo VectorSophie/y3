@@ -69,6 +69,13 @@ describe("WASM: semantics stay in the runtime core", () => {
     expect(r.trace.length).toBeGreaterThan(0);
   });
 
+  it("a loop under a tilted pose: the anchor keeps up as well as forward", () => {
+    const source = `+++\n[start]\nfacing = "남"\nup = "동"\n+++\n${column(["i는 0이다.", "여기가 처음이다.", "i에 1을 더한다.", "i가 3보다 작으면 끝은 처음이다.", "i를 말한다.", "끝이다."])}`;
+    const r = same(source);
+    expect(r.output).toEqual(["3"]);
+    expect(r.trace[0]?.orientation).toEqual({ forward: "south", up: "east" });
+  });
+
   it("loops, calls, recursion, data and collections", () => {
     const appendix = ":합: (n: i64) → i64 ⟦\n[n이 0이면 0을 돌려준다.]\n[m은 n이다.]\n[m에서 1을 뺀다.]\n[r은 합: m]\n[r에 n을 더한다.]\n[r을 돌려준다.]\n⟧\n";
     expect(same(column(["s는 합: 100", "s를 말한다.", "끝이다."], appendix), 100_000).output).toEqual(["5050"]);
