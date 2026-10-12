@@ -1,7 +1,7 @@
 import type { DefinitionAst, DocumentAst } from "../language/ast";
 import { DIAGNOSTIC_CODES as CODES, Y3DocumentError, type Diagnostic } from "../language/diagnostics";
 import { parseDocument } from "../language/document-parser";
-import { formatDocument } from "../format/formatter";
+import { canonicalSignature, formatDocument } from "../format/formatter";
 
 // The folder form of a .y3 document, produced only on request:
 //
@@ -81,7 +81,7 @@ export function unpackDocument(source: string): FileMap {
     const text = formatDocument(planeFile);
     // The plane's own "⟦" line (after any comments) carries the signature.
     const withSignature =
-      definition.signature === null ? text : text.replace(/^⟦$/mu, `${definition.signature} ⟦`);
+      definition.signature === null ? text : text.replace(/^⟦$/mu, `${canonicalSignature(definition.signature)} ⟦`);
     files.set(`${PLANES_DIR}${definition.name}${PLANE_EXTENSION}`, withSignature);
   }
   return files;

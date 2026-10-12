@@ -88,9 +88,14 @@ export function canonicalizeDocument(ast: DocumentAst): DocumentAst {
   };
 }
 
+// A signature's arrow is always written '→'.
+export function canonicalSignature(signature: string): string {
+  return signature.replace(/\s*->\s*/u, " → ");
+}
+
 // The opening line of a named plane: ':name: ⟦', or ':name: (signature) ⟦'.
 export function definitionHead(definition: Pick<DefinitionAst, "name" | "signature">): string {
-  return definition.signature === null ? `:${definition.name}:` : `:${definition.name}: ${definition.signature}`;
+  return definition.signature === null ? `:${definition.name}:` : `:${definition.name}: ${canonicalSignature(definition.signature)}`;
 }
 
 export function formatDocument(source: DocumentAst, options: FormatOptions = {}): string {

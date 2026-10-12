@@ -402,7 +402,8 @@ function parseMatch(head: string[], tail: string, issues: SentenceIssue[]): ActA
     kind: "match",
     scrutinee: expr(scrutinee.stem),
     arms: arms.map((arm) => {
-      const arrow = splitTop(arm.replace("->", "→"), "→");
+      // '→', or '->' for keyboards without it; never inside a quoted text.
+      const arrow = splitTop(arm, "→").length === 2 ? splitTop(arm, "→") : splitTop(arm, "->");
       if (arrow.length !== 2 || !arrow[0] || !arrow[1]) fail(SENTENCE_CODES.BAD_MATCH, `an arm is written '패턴 → 값', not '${arm}'`);
       return { pattern: pattern(arrow[0]), body: expr(arrow[1]) };
     }),
@@ -444,7 +445,11 @@ function parseCall(words: string[], issues: SentenceIssue[]): ActAst {
     const callee = head.slice(-size);
     if (callee.length !== size || !callee.every((w) => NOUN_PATTERN.test(w))) continue;
     const targets = targetsOf(head.slice(0, head.length - size));
-    if (targets) readings.push({ targets, callee });
+    if (targets) {
+      const twice = targets.find((t, i) => targets.indexOf(t) !== i);
+      if (twice) fail(SENTENCE_CODES.BAD_CALL, `'${twice}' would receive two results; each result needs its own noun`);
+      readings.push({ targets, callee });
+    }
   }
   if (readings.length === 0) fail(SENTENCE_CODES.BAD_CALL, usage);
   const call: CallAst = { kind: "call", readings, args: args.map(expr) };

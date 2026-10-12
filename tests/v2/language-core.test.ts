@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  ALL_ORIENTATIONS,
+  DIRECTION_NAMES,
+  orientationLabel,
+  vectorOf,
   compileProgram,
   describeEffect,
+  formatDocument,
   formatProgramTrace,
   formatType,
   hasErrors,
@@ -200,6 +205,41 @@ ${SQUARE}`;
       [{ x: 0, y: 1, z: 0 }, "south", "돈다#1"],
     ]);
   });
+
+  // Property: from every one of the 24 orientations, a call into a callee that turns
+  // returns to the cell after the call along the caller's own forward, facing exactly as
+  // the caller did. The callee always starts facing 남 and turns to 동 before returning.
+  for (const o of ALL_ORIENTATIONS) {
+    it(`restores ${orientationLabel(o)} after a callee that turns`, () => {
+      const plane = (center: string) => `⟦\n[끝이다.] [끝이다.] [끝이다.]\n[끝이다.] [${center}] [끝이다.]\n[끝이다.] [끝이다.] [끝이다.]\n⟧`;
+      const source = `+++
+[start]
+plane = 1
+cell = [1, 1]
+facing = "${DIRECTION_NAMES[o.forward]}"
+up = "${DIRECTION_NAMES[o.up]}"
++++
+
+${plane("끝이다.")}
+
+    ${plane("돈다:")}
+
+        ${plane("끝이다.")}
+
+※
+
+:돈다: () ⟦
+[왼쪽을 본다.] [돌아간다.]
+⟧
+`;
+      const result = run(source);
+      expect(result.outcome.status).toBe("HALT");
+      const back = result.trace.find((e) => e.instruction.op === "return");
+      expect(back?.orientation).toEqual({ forward: "east", up: "up" });
+      const v = vectorOf(o.forward);
+      expect(back?.next).toEqual({ position: { x: 1 + v.x, y: 1 + v.y, z: 1 + v.z }, orientation: o });
+    });
+  }
 
   it("calls are not jumps: a back-edge in a callee cannot reach the caller's anchor", () => {
     const appendix = `:도망: () → Int ⟦
@@ -583,3 +623,88 @@ describe("surface syntax", () => {
     expect(text).toContain("제곱#1(0,6,0) 남/위 [곱을 돌려준다.] → (0,1,0) 남/위\n  return from 제곱#1: 1\n  결과 := 1");
   });
 });
+
+describe("adversarial cases", () => {
+  it("a callee cannot close the caller's channel: channels belong to a frame's nouns", () => {
+    const appendix = `:보내기: (수: Int) ⟦
+[수를 전으로 보낸다.]
+[돌아간다.]
+⟧
+`;
+    const result = run(program(["수가 다음에서 온다.", "보내기: 수", "끝이다."], appendix));
+    expect(result.outcome).toMatchObject({ status: "PARADOX", frame: "보내기#1" });
+  });
+
+  it("a channel left open in a callee is reported unanswered when it returns", () => {
+    const appendix = `:열기: () → Int ⟦
+[b가 다음에서 온다.]
+[b를 돌려준다.]
+⟧
+`;
+    const result = run(program(["x는 열기:", "x는 7이었다.", "x를 말한다.", "끝이다."], appendix));
+    expect(effects(result)).toContain("channel S1 never answered: β1 has no sender");
+    expect(result.output).toEqual(["7"]); // the caller's testimony still settles the symbol
+  });
+
+  it("returning from inside a loop closes the loop: its promises fall due first", () => {
+    const appendix = `:고리: () → Int ⟦
+[k는 미정이다.]
+[여기가 처음이다.]
+[k는 2일 것이다.]
+[k를 돌려준다.]
+⟧
+`;
+    const result = run(program(["x는 고리:", "x를 말한다.", "끝이다."], appendix));
+    expect(result.output).toEqual(["2"]);
+    expect(effects(result)).toContain("leave 처음 (0,1,0)");
+  });
+
+  it("an open symbol returned and never constrained makes the output AMBIGUOUS", () => {
+    const appendix = `:모름: () → Int ⟦
+[y는 미정이다.]
+[y를 돌려준다.]
+⟧
+`;
+    expect(run(program(["x는 모름:", "x를 말한다.", "끝이다."], appendix)).outcome.status).toBe("AMBIGUOUS");
+  });
+
+  it("refuses a noun that would receive two results", () => {
+    expect(errors(program(["a와 a는 f: 1", "끝이다."]))).toEqual([
+      "Y3G012 [a와 a는 f: 1] 'a' would receive two results; each result needs its own noun",
+    ]);
+  });
+
+  it("keeps '->' inside a text literal in a match arm", () => {
+    expect(run(program(["o는 Some: 1", 'x는 o에 따라: Some(_) -> "a->b", None -> "c"', "x를 말한다.", "끝이다."])).output).toEqual(["a->b"]);
+  });
+
+  it("writes through nested places: an element's field, an element of an element", () => {
+    const result = run(
+      program(["p는 점: 1, 2", "q는 점: 3, 4", "점들은 배열: p, q", "점들의 1번의 가로는 30이다.", "점들을 말한다.", "끝이다."], "자료 점 = { 가로: Int, 세로: Int }\n"),
+    );
+    expect(result.output).toEqual(["[점(1, 2), 점(30, 4)]"]);
+    expect(run(program(["행은 배열: 1, 2", "표는 배열: 행, 행", "표의 0번의 1번은 9이다.", "표를 말한다.", "끝이다."])).output).toEqual(["[[1, 9], [1, 2]]"]);
+  });
+
+  it("canonicalises a signature's arrow", () => {
+    const loaded = loadDocument(program(["끝이다."], ":f: (x: Int) -> Int ⟦ [x를 돌려준다.] ⟧\n"));
+    expect(loaded.ast?.appendix?.definitions[0]?.signature).toBe("(x: Int) -> Int");
+    expect(formatDocumentOf(program(["끝이다."], ":f: (x: Int) -> Int ⟦ [x를 돌려준다.] ⟧\n"))).toContain(":f: (x: Int) → Int ⟦");
+  });
+
+  it("a plane with no signature cannot be called: composition and calls stay apart", () => {
+    expect(errors(program(["x는 바닥:", "끝이다."], ":바닥: ⟦ [ ] ⟧\n"))).toEqual(["Y3Y006 [x는 바닥:] '바닥' is not a callable plane or a constructor here"]);
+  });
+
+  it("a module's volume is never run when it is imported", () => {
+    const lib = `+++\nname = "라이브러리"\n+++\n\n⟦\n["실행되면 안 된다"를 말한다.]\n[끝이다.]\n⟧\n\n※\n\n:하나: () → Int ⟦ [1을 돌려준다.] ⟧\n`;
+    const result = run(`+++\n[imports]\n"라" = "lib.y3"\n+++\n\n${program(["x는 라 하나:", "x를 말한다.", "끝이다."])}`, { "lib.y3": lib });
+    expect(result.output).toEqual(["1"]);
+  });
+});
+
+function formatDocumentOf(source: string): string {
+  const loaded = loadDocument(source);
+  if (!loaded.ast) throw new Error("expected a document");
+  return formatDocument(loaded.ast);
+}
