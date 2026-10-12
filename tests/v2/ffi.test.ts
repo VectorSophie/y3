@@ -23,12 +23,12 @@ import {
   type ProgramResult,
 } from "../../src/v2";
 import { observable } from "./compile-helpers";
-import { BUFFERS, IMPORTS, MATH } from "./ffi-libraries";
+import { BAD_ALLOC, BUFFERS, IMPORTS, MATH } from "./ffi-libraries";
 
 // M9 FFI (docs/v2-ffi.md): 외부 declarations, the C ABI over wasm32, pointers as opaque
 // handles, and every way the boundary can be misused.
 
-const LIBS: Record<string, Uint8Array> = { "math.wasm": MATH, "buf.wasm": BUFFERS, "imports.wasm": IMPORTS };
+const LIBS: Record<string, Uint8Array> = { "math.wasm": MATH, "buf.wasm": BUFFERS, "imports.wasm": IMPORTS, "bad.wasm": BAD_ALLOC };
 
 const DECLS = [
   "외부 씨 더하기 (a: i32, b: i32) → i32 = add",
@@ -148,12 +148,28 @@ describe("FFI: buffers and pointers", () => {
     expect(out(["a는 배열: 1u8, 2u8, 250u8", "s는 버 배열합: a", "s를 말한다.", "b는 배열 자르기: a, 1, 3", "t는 버 합: b", "t를 말한다."])).toEqual(["253", "252"]);
   });
 
+  it("an allocator that returns an address outside memory is a FAULT, before anything is copied", () => {
+    const c = compile(['n은 나쁜 세기: "가나다"', "끝이다."], ["외부 나쁜 세기 (s: Text) → u32 = count"], '"나쁜" = "bad.wasm"');
+    if ("errors" in c) throw new Error(c.errors.join());
+    const r = runProgram(c.program, c.manifest, { host: memoryHost({ libraries: LIBS }) });
+    expect(r.outcome).toMatchObject({ status: "FAULT", message: expect.stringMatching(/y3_alloc\(9\) returned an unusable address 65530/) });
+  });
+
   it("an out-buffer's bytes become the call's [u8; N] result", () => {
     expect(out(["b는 버 채우기: 10u8", "b를 말한다."])).toEqual(["[10, 11, 12, 13]"]);
   });
 
   it("a foreign pointer is an opaque handle: used, then freed once", () => {
     expect(out(["c는 버 새계수기:", "a는 버 다음: c", "b는 버 다음: c", "b를 말한다.", "버 해방: c", "c를 말한다."])).toEqual(["2", "<foreign #0>"]);
+  });
+
+  it("events name the handle they act on", () => {
+    const r = run(["c는 버 새계수기:", "a는 버 다음: c", "버 해방: c", "끝이다."]);
+    expect(r.events.map((e) => [e.source, e.resource])).toEqual([
+      ["foreign.버.새계수기", "foreign#0"],
+      ["foreign.버.다음", "foreign#0"],
+      ["foreign.버.해방", "foreign#0"],
+    ]);
   });
 
   it("use after free and double free are FAULTs before foreign code runs", () => {

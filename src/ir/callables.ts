@@ -36,6 +36,8 @@ export type CallTypes = { readonly args: readonly Type[]; readonly result: Type 
 //                     std.io.stdout for a committed write
 //   kind              output, input (stdin, clock, file reads), effect (file writes and
 //                     the rest), foreign
+//   resource          the handle it acts on or opens ("file#0", "foreign#2"), stable
+//                     across record and replay; null when there is none
 //   args              the arguments, as debug text
 //   value             the result, as debug text (file contents are redacted)
 //   payload           the result itself, for replay (debug text is never replayed)
@@ -45,6 +47,7 @@ export type HostEvent = {
   readonly frame: string | null;
   readonly source: string;
   readonly kind: "output" | "input" | "effect" | "foreign";
+  readonly resource: string | null;
   readonly args: readonly string[];
   readonly value: string;
   readonly payload: Payload;

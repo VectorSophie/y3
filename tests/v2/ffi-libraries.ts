@@ -76,3 +76,13 @@ export const IMPORTS = encodeModule({
   imports: [{ module: "env", name: "system", type: t([i32], [i32]) }],
   functions: [{ export: "run", type: t([i32], [i32]), body: [...I.localGet(0), ...I.call(0)] }],
 });
+
+// An allocator that lies: it hands out an address past the end of memory.
+export const BAD_ALLOC = encodeModule({
+  memory: { pages: 1, export: "memory" },
+  functions: [
+    { export: "y3_alloc", type: t([i32], [i32]), body: I.i32(65530) },
+    { export: "y3_free", type: t([i32, i32], []), body: [] },
+    { export: "count", type: t([i32, i32], [i32]), body: I.localGet(1) },
+  ],
+});

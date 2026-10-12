@@ -217,7 +217,7 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
         replay.next += 1;
       }
       host.write(text);
-      events.push({ step: now, at: lastAt, frame: frame.label, source: "std.io.stdout", kind: "output", args: [], value: JSON.stringify(text), payload: JSON.stringify(text) });
+      events.push({ step: now, at: lastAt, frame: frame.label, source: "std.io.stdout", kind: "output", resource: null, args: [], value: JSON.stringify(text), payload: JSON.stringify(text) });
       committed += 1;
     }
   };
@@ -303,7 +303,9 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
       }
     }
     const shown = e.redact && result.kind === "data" && result.variant === "Ok" && result.fields[0]?.kind === "text" ? `Ok(<${new TextEncoder().encode(result.fields[0].value).length} bytes>)` : showValue(result);
-    events.push({ step: now, at: lastAt, frame: frame.label, source: e.source, kind: e.kind, args: e.args.map(showValue), value: shown, payload: encodePayload(result) });
+    const handle = [...e.args, result].find((v) => v.kind === "resource");
+    const resource = handle?.kind === "resource" ? `${handle.resource}#${handle.id}` : null;
+    events.push({ step: now, at: lastAt, frame: frame.label, source: e.source, kind: e.kind, resource, args: e.args.map(showValue), value: shown, payload: encodePayload(result) });
     effects.push({ kind: "effect", source: e.source, value: shown });
     return result;
   };
