@@ -1,0 +1,24 @@
+# Records, sums and exhaustive matches. Ordinary errors are Result values.
+⟦
+[위치는 점: 1, 2]
+[위치의 가로에 10을 더한다.]
+[위치를 말한다.]
+[도형은 사각: 3, 4]
+[넓이는 도형에 따라: 원(r) → r, 사각(w, _) → w, 빈모양 → 0]
+[넓이를 말한다.]
+[결과는 나눔: 6, 0]
+[글은 결과에 따라: Ok(n) → "됨", Err(e) → e]
+[글을 말한다.]
+[끝이다.]
+⟧
+
+※
+
+자료 모양 = 원(Int) | 사각(Int, Int) | 빈모양
+자료 점 = { 가로: Int, 세로: Int }
+
+:나눔: (수: Int, 나눌수: Int) → Result<Int, Text> ⟦
+[r은 Ok: 수]
+[나눌수가 0이면 r은 Err: "0으로 나눌 수 없다"]
+[r을 돌려준다.]
+⟧

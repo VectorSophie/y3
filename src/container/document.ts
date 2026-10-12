@@ -25,7 +25,8 @@ export function loadDocument(source: string): LoadedDocument {
   const frontMatterSpan = parsed.ast.frontMatter?.span;
   const interpreted = interpretManifest(parsed.ast.frontMatter?.text ?? null, frontMatterSpan);
   const diagnostics = [...built.diagnostics, ...interpreted.diagnostics];
-  if (built.space && interpreted.manifest) {
+  // A library module (no volume) has nowhere to start.
+  if (built.space && interpreted.manifest && built.space.layers.length > 0) {
     diagnostics.push(...checkStart(built.space, interpreted.manifest, frontMatterSpan));
   }
   return { ast: parsed.ast, space: built.space, manifest: interpreted.manifest, diagnostics };

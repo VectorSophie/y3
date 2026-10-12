@@ -1,5 +1,6 @@
 import type { Pose } from "../space/manifest";
 import type { Compass, Relative, Turn } from "../space/orientation";
+import type { Space } from "../space/volume";
 
 // What the spatial machine can do. Cells hold sentences; a decoder turns a sentence
 // into one of these. In M1 the decoder is supplied by the caller (tests use the
@@ -13,6 +14,11 @@ export type Instruction =
   | { readonly op: "step"; readonly relative: Relative } // move once; orientation unchanged
   | { readonly op: "floor"; readonly delta: 1 | -1 } // z ± 1; x, y and orientation unchanged
   | { readonly op: "jump"; readonly to: Pose } // return to a pose the program already stood on (a loop anchor)
+  // Into another space and back. A jump stays in the current space and remembers
+  // nothing; a call enters a callable plane's space and a return comes back to a pose
+  // the caller saved. The machine only moves; frames belong to the interpreter.
+  | { readonly op: "call"; readonly space: Space; readonly to: Pose; readonly label: string }
+  | { readonly op: "return"; readonly space: Space; readonly to: Pose; readonly label: string | null } // label null: the main volume
   | { readonly op: "end" }; // 끝이다: the run ends deliberately
 
 export type DecodeResult = Instruction | { readonly error: string };

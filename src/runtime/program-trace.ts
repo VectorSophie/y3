@@ -39,6 +39,10 @@ export function describeEffect(effect: Effect): string {
       return `leave 처음 ${at(effect.anchor)}`;
     case "end":
       return "end";
+    case "call":
+      return `call ${effect.frame}(${effect.args.join(", ")})`;
+    case "return":
+      return `return from ${effect.frame}${effect.values.length > 0 ? `: ${effect.values.join(", ")}` : ""}`;
     case "declare":
       return `${effect.name} := ${effect.symbol}  [미정]`;
     case "bind":
@@ -77,9 +81,16 @@ export function describeEffect(effect: Effect): string {
   }
 }
 
+// A position, named by the activation it is in when that is not the main volume.
+function where(frame: string | null, c: { x: number; y: number; z: number }): string {
+  return frame === null ? at(c) : `${frame}${at(c)}`;
+}
+
 export function formatProgramTraceEntry(entry: ProgramTraceEntry): string {
   const cell = entry.cell === null ? "[ ]" : `[${entry.cell}]`;
-  const head = `${entry.step} ${at(entry.at)} ${orientationLabel(entry.orientation)} ${cell} → ${at(entry.next.position)} ${orientationLabel(entry.next.orientation)}`;
+  const { instruction } = entry;
+  const to = instruction.op === "call" || instruction.op === "return" ? instruction.label : entry.frame;
+  const head = `${entry.step} ${where(entry.frame, entry.at)} ${orientationLabel(entry.orientation)} ${cell} → ${where(to, entry.next.position)} ${orientationLabel(entry.next.orientation)}`;
   return [head, ...entry.effects.map((effect) => `  ${describeEffect(effect)}`)].join("\n");
 }
 

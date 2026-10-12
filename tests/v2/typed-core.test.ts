@@ -136,9 +136,9 @@ describe("Bool", () => {
 
 describe("colon calls", () => {
   it("parse as calls, with or without a full stop, as statements or assignments", () => {
-    expect(parseSentence("표준 줄출력: 값").sentence).toMatchObject({ kind: "call", call: { namespace: "표준", name: "줄출력" } });
+    expect(parseSentence("표준 줄출력: 값").sentence).toMatchObject({ kind: "call", call: { readings: [{ targets: [], callee: ["표준", "줄출력"] }] } });
     expect(parseSentence("표준 줄출력: 값.").sentence).toMatchObject({ kind: "call" });
-    expect(parseSentence("크기는 수학 절댓값: 값").sentence).toMatchObject({ kind: "assign", noun: "크기", value: { kind: "call" } });
+    expect(parseSentence("크기는 수학 절댓값: 값").sentence).toMatchObject({ kind: "call", call: { readings: [{ targets: ["크기"], callee: ["수학", "절댓값"] }] } });
     expect(parseSentence("수학 최댓값: 1, 2").sentence).toMatchObject({ call: { args: [{ value: 1n }, { value: 2n }] } });
   });
 

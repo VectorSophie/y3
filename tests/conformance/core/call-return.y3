@@ -1,0 +1,16 @@
+# A call allocates a frame; a jump does not. The callee turns to face 동 and returns
+# two values; the caller resumes one cell south of the call, still facing 남.
+⟦
+[합과 차는 합차: 17, 5]
+[합을 말한다.]
+[차를 말한다.]
+[끝이다.]
+⟧
+
+※
+
+:합차: (가: Int, 나: Int) → (Int, Int) ⟦
+[합은 가이다.]      [ ]            [ ]                 [ ]
+[합에 나를 더한다.] [ ]            [ ]                 [ ]
+[왼쪽을 본다.]      [차는 가이다.] [차에서 나를 뺀다.] [합과 차를 돌려준다.]
+⟧

@@ -1,8 +1,8 @@
 import type { Diagnostic } from "../language/diagnostics";
 import { callable } from "../ir/callables";
-import type { Expr, Noun, NounId, Pattern, Provenance, Stmt } from "../ir/hir";
+import type { Expr, Noun, NounId, Pattern, PlaneId, Provenance, Stmt } from "../ir/hir";
 import type { ConcreteValue } from "../semantics/values";
-import { BOOL, formatType, INT, named, substituteParams, TEXT, TypeTable, Unifier, UNIT_TYPE, type Type } from "./types";
+import { arrayOf, BOOL, formatType, INT, named, sliceOf, substituteParams, TEXT, TypeTable, Unifier, UNIT_TYPE, type Type } from "./types";
 
 // The type checker. It walks the HIR once, in source order, unifying as it goes, then
 // writes the solved type onto every expression and noun. Inference is local and
@@ -23,7 +23,19 @@ export const TYPE_CODES = {
   UNKNOWN: "Y3Y006",
   DUPLICATE_BINDING: "Y3Y007",
   UNREACHABLE_ARM: "Y3Y008",
+  RETURN_OUTSIDE: "Y3C001",
 } as const;
+
+// What a body's checker needs to know beyond its own nouns: the signatures of the
+// callable planes it can call, and what it returns itself (null for the main volume,
+// which does not return).
+export type PlaneSignature = { readonly params: readonly Type[]; readonly results: readonly Type[] };
+export type BodyContext = {
+  readonly planes: ReadonlyMap<PlaneId, PlaneSignature & { readonly name: string }>;
+  readonly results: readonly Type[] | null;
+};
+
+const MAIN_CONTEXT: BodyContext = { planes: new Map(), results: null };
 
 // Pattern-matrix analysis (Maranget, "Warnings for pattern matching"). A constructor
 // is a variant, a record, 참/거짓 or (); Int and Text have infinitely many literals, so
@@ -81,6 +93,7 @@ export class TypeChecker {
   constructor(
     private readonly nouns: ReadonlyMap<NounId, Noun>,
     readonly table: TypeTable = new TypeTable(),
+    private readonly context: BodyContext = MAIN_CONTEXT,
   ) {}
 
   private report(code: string, at: Provenance, message: string, severity: "error" | "warning" = "error"): void {
@@ -126,6 +139,11 @@ export class TypeChecker {
     }
   }
 
+  // A callable plane's parameter: its type comes from the signature.
+  param(id: NounId, type: Type): void {
+    this.nounTypes.set(id, type);
+  }
+
   stmt(s: Stmt): void {
     switch (s.node) {
       case "StoreNoun":
@@ -152,6 +170,12 @@ export class TypeChecker {
       case "TemporalAssert":
       case "TemporalPromise":
         this.noun(s.noun, this.expr(s.value), s.at);
+        return;
+      case "CallPlane":
+        this.callPlane(s);
+        return;
+      case "Return":
+        this.return(s);
         return;
       default:
         return; // movement, anchors, end, fixed point: nothing to type
@@ -206,7 +230,89 @@ export class TypeChecker {
         return this.field(e);
       case "Match":
         return this.match(e);
+      case "SetField": {
+        const field = this.field(e);
+        this.expect(field, this.expr(e.value), e.at, `the new '${e.field}'`);
+        return this.u.resolve(e.record.type);
+      }
+      case "ArrayLiteral": {
+        const element = this.u.fresh();
+        for (const x of e.elements) this.expect(element, this.expr(x), e.at, "every element of an array");
+        return arrayOf(element, e.elements.length);
+      }
+      case "Index": {
+        const base = this.sequence(e.base, e.at, "an element");
+        this.expect(INT, this.expr(e.index), e.at, "an index");
+        return base?.element ?? this.u.fresh();
+      }
+      case "SetIndex": {
+        const base = this.sequence(e.base, e.at, "an element");
+        this.expect(INT, this.expr(e.index), e.at, "an index");
+        const value = this.expr(e.value);
+        if (base?.kind === "slice") {
+          this.report(TYPE_CODES.MISMATCH, e.at, `a slice (${formatType(base)}) is a view of an array; write the element through the array`);
+        }
+        if (base) this.expect(base.element, value, e.at, "the new element");
+        return base ?? this.u.fresh();
+      }
+      case "Slice": {
+        const base = this.sequence(e.base, e.at, "a slice");
+        this.expect(INT, this.expr(e.from), e.at, "where a slice starts");
+        this.expect(INT, this.expr(e.to), e.at, "where a slice ends");
+        return sliceOf(base?.element ?? this.u.fresh());
+      }
+      case "Length":
+        this.sequence(e.base, e.at, "a length");
+        return INT;
     }
+  }
+
+  // An array or slice operand, whose type must be known here (local inference).
+  private sequence(e: Expr, at: Provenance, what: string): Extract<Type, { kind: "array" | "slice" }> | null {
+    const type = this.u.resolve(this.expr(e));
+    if (type.kind === "array" || type.kind === "slice") return type;
+    this.report(TYPE_CODES.MISMATCH, at, `${what} needs an array or a slice whose type is known here, not ${formatType(type)}`);
+    return null;
+  }
+
+  private callPlane(s: Extract<Stmt, { node: "CallPlane" }>): void {
+    const target = this.context.planes.get(s.plane);
+    const args = s.args.map((arg) => this.expr(arg));
+    if (!target) {
+      this.report(TYPE_CODES.UNKNOWN, s.at, `no callable plane '${s.plane}'`);
+      return;
+    }
+    const label = `':${target.name}:'`;
+    const n = target.params.length;
+    if (args.length !== n) {
+      this.report(TYPE_CODES.ARITY, s.at, `${label} takes ${n} argument${n === 1 ? "" : "s"}, not ${args.length}`);
+    } else {
+      args.forEach((arg, i) => this.expect(target.params[i] as Type, arg, s.at, `argument ${i + 1} of ${label}`));
+    }
+    // Results may be discarded; one name for a plane that returns nothing receives ().
+    const results = target.results.length === 0 && s.results.length === 1 ? [UNIT_TYPE] : target.results;
+    if (s.results.length === 0) return;
+    if (s.results.length !== results.length) {
+      const m = target.results.length;
+      this.report(TYPE_CODES.ARITY, s.at, `${label} returns ${m === 0 ? "nothing" : `${m} value${m === 1 ? "" : "s"}`}, not ${s.results.length}`);
+      return;
+    }
+    s.results.forEach((noun, i) => this.noun(noun, results[i] as Type, s.at));
+  }
+
+  private return(s: Extract<Stmt, { node: "Return" }>): void {
+    const values = s.values.map((v) => this.expr(v));
+    const expected = this.context.results;
+    if (expected === null) {
+      this.report(TYPE_CODES.RETURN_OUTSIDE, s.at, "only a callable plane returns; the main volume ends with '끝이다'");
+      return;
+    }
+    if (values.length !== expected.length) {
+      const m = expected.length;
+      this.report(TYPE_CODES.ARITY, s.at, `this plane returns ${m === 0 ? "nothing ('돌아간다')" : `${m} value${m === 1 ? "" : "s"}`}, not ${values.length}`);
+      return;
+    }
+    values.forEach((v, i) => this.expect(expected[i] as Type, v, s.at, `returned value ${i + 1}`));
   }
 
   private literalType(value: ConcreteValue, at: Provenance): Type {
@@ -220,7 +326,9 @@ export class TypeChecker {
       case "unit":
         return UNIT_TYPE;
       case "data":
-        this.report(TYPE_CODES.UNKNOWN, at, "data values are built with Construct, not written as literals");
+      case "array":
+      case "slice":
+        this.report(TYPE_CODES.UNKNOWN, at, "data values are built with Construct or ArrayLiteral, not written as literals");
         return this.u.fresh();
     }
   }
@@ -270,7 +378,7 @@ export class TypeChecker {
     return result;
   }
 
-  private field(e: Extract<Expr, { node: "Field" }>): Type {
+  private field(e: Extract<Expr, { node: "Field" | "SetField" }>): Type {
     const record = this.u.resolve(this.expr(e.record));
     // Local inference: the record's type must already be known here.
     const def = record.kind === "named" ? this.table.get(record.name) : null;
@@ -450,8 +558,8 @@ export class TypeChecker {
 }
 
 // Checks a whole program, in the order given.
-export function checkProgram(stmts: readonly Stmt[], nouns: readonly Noun[], table?: TypeTable): Diagnostic[] {
-  const checker = new TypeChecker(new Map(nouns.map((n) => [n.id, n])), table);
+export function checkProgram(stmts: readonly Stmt[], nouns: readonly Noun[], table?: TypeTable, context?: BodyContext): Diagnostic[] {
+  const checker = new TypeChecker(new Map(nouns.map((n) => [n.id, n])), table, context);
   for (const s of stmts) checker.stmt(s);
   checker.finish();
   return checker.diagnostics;

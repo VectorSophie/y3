@@ -35,8 +35,8 @@ export function extractPlane(ast: DocumentAst, z: number, name: string): Documen
 
   const appendix: AppendixAst = ast.appendix
     ? structuredClone(ast.appendix)
-    : { comments: [], definitions: [], span: NO_SPAN };
-  appendix.definitions.push({ name, plane: clonePlane(slot.plane), comments: [], span: NO_SPAN });
+    : { comments: [], declarations: [], definitions: [], span: NO_SPAN };
+  appendix.definitions.push({ name, signature: null, plane: clonePlane(slot.plane), comments: [], span: NO_SPAN });
 
   const volume = ast.volume.map((other, index) =>
     index === z ? { comments: structuredClone(other.comments), plane: { kind: "ref" as const, name, span: NO_SPAN } } : structuredClone(other),

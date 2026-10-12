@@ -24,6 +24,7 @@ export type BuildResult = { space: Space | null; diagnostics: Diagnostic[] };
 export function buildSpace(ast: DocumentAst): BuildResult {
   const diagnostics: Diagnostic[] = [];
   const definitions = new Map<string, InlinePlaneAst>();
+  const callable = new Set((ast.appendix?.definitions ?? []).filter((d) => d.signature !== null).map((d) => d.name));
 
   for (const definition of ast.appendix?.definitions ?? []) {
     if (definitions.has(definition.name)) {
@@ -57,11 +58,20 @@ export function buildSpace(ast: DocumentAst): BuildResult {
       });
       return;
     }
+    if (callable.has(plane.name)) {
+      diagnostics.push({
+        code: CODES.CALLABLE_PLACED,
+        severity: "error",
+        message: `':${plane.name}:' has a signature: it is a callable plane, run by a call, not a floor of the volume`,
+        span: plane.span,
+      });
+      return;
+    }
     layers.push({ z, plane: planeFromAst(definition), presentation: { kind: "named", name: plane.name } });
   });
 
   for (const definition of ast.appendix?.definitions ?? []) {
-    if (!used.has(definition.name)) {
+    if (!used.has(definition.name) && definition.signature === null) {
       diagnostics.push({
         code: CODES.UNUSED_PLANE,
         severity: "warning",

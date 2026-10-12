@@ -23,13 +23,13 @@ const noun = (name: string) => ({ kind: "noun", name });
 
 describe("present-tense sentences", () => {
   const cases: [string, unknown][] = [
-    ["값은 3이다.", { kind: "assign", noun: "값", value: int(3) }],
-    ["값은 -3이다.", { kind: "assign", noun: "값", value: int(-3) }],
-    ['인사는 "안녕"이다.', { kind: "assign", noun: "인사", value: { kind: "text", value: "안녕" } }],
-    ["합은 값이다.", { kind: "assign", noun: "합", value: noun("값") }],
-    ["값에 1을 더한다.", { kind: "add", noun: "값", amount: int(1) }],
-    ["값에 수를 더한다.", { kind: "add", noun: "값", amount: noun("수") }],
-    ["값에서 2를 뺀다.", { kind: "subtract", noun: "값", amount: int(2) }],
+    ["값은 3이다.", { kind: "assign", place: { noun: "값", steps: [] }, value: int(3) }],
+    ["값은 -3이다.", { kind: "assign", place: { noun: "값", steps: [] }, value: int(-3) }],
+    ['인사는 "안녕"이다.', { kind: "assign", place: { noun: "인사", steps: [] }, value: { kind: "text", value: "안녕" } }],
+    ["합은 값이다.", { kind: "assign", place: { noun: "합", steps: [] }, value: noun("값") }],
+    ["값에 1을 더한다.", { kind: "add", place: { noun: "값", steps: [] }, amount: int(1) }],
+    ["값에 수를 더한다.", { kind: "add", place: { noun: "값", steps: [] }, amount: noun("수") }],
+    ["값에서 2를 뺀다.", { kind: "subtract", place: { noun: "값", steps: [] }, amount: int(2) }],
     ["값을 말한다.", { kind: "say", value: noun("값") }],
     ['"다른 수"를 말한다.', { kind: "say", value: { kind: "text", value: "다른 수" } }],
     ['"따옴표 \\" 안"을 말한다.', { kind: "say", value: { kind: "text", value: '따옴표 " 안' } }],
@@ -156,8 +156,8 @@ describe("temporal cycles (M4)", () => {
     ["처음은 끝이었다.", { kind: "fixed" }],
     ["처음의 값은 0이었다.", { kind: "assert", noun: "값", anchor: "처음", value: int(0) }],
     ["끝의 값은 0일 것이다.", { kind: "promise", noun: "값", anchor: "끝", value: int(0) }],
-    ["원래는 처음의 값이다.", { kind: "assign", noun: "원래", value: { kind: "anchored", anchor: "처음", name: "값" } }],
-    ["결과는 끝의 합이다.", { kind: "assign", noun: "결과", value: { kind: "anchored", anchor: "끝", name: "합" } }],
+    ["원래는 처음의 값이다.", { kind: "assign", place: { noun: "원래", steps: [] }, value: { kind: "anchored", anchor: "처음", name: "값" } }],
+    ["결과는 끝의 합이다.", { kind: "assign", place: { noun: "결과", steps: [] }, value: { kind: "anchored", anchor: "끝", name: "합" } }],
     ["처음의 값을 말한다.", { kind: "say", value: { kind: "anchored", anchor: "처음", name: "값" } }],
   ];
   for (const [text, expected] of cycles) {

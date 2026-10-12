@@ -113,6 +113,37 @@ calls use a colon:
 
 `y3 check` refuses a mistyped program before it runs. `y3 ir` prints the typed IR, with
 the cell each statement came from.
+
+**M6** adds the ordinary language around the spatial and temporal core
+(`docs/v2-language-core.md`):
+- callable planes, each call running in a frame that restores the caller's pose;
+- several return values;
+- records, sums and exhaustive matches;
+- `Option`/`Result` for ordinary errors;
+- arrays and slices;
+- modules imported by alias.
+
+```
+⟦
+[합은 누적: 3]
+[합을 말한다.]
+[끝이다.]
+⟧
+
+※
+
+:누적: (수: Int) → Int ⟦
+[수가 0이면 0을 돌려준다.]
+[작은것은 수이다.]
+[작은것에서 1을 뺀다.]
+[나머지는 누적: 작은것]
+[나머지에 수를 더한다.]
+[나머지를 돌려준다.]
+⟧
+```
+
+This prints `6`. A symbol can pass through a call still unknown and be determined after
+the call returns: temporal identity is not tied to a frame.
 `run` and `trace` choose v1 or v2 from the file: v2 documents contain planes. The
 sections below describe v1, whose examples are in `examples/v1/`; v2 examples are in
 `examples/v2/`.

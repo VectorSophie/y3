@@ -13,7 +13,8 @@ export type TemporalOutcome = {
   readonly message: string;
 };
 
-export type ProgramOutcome = Outcome | TemporalOutcome;
+// `frame` names the call an outcome happened in ("제곱#2"); absent in the main volume.
+export type ProgramOutcome = (Outcome | TemporalOutcome) & { readonly frame?: string };
 export type ProgramStatus = ProgramOutcome["status"];
 
 export const PROGRAM_LABELS: Readonly<Record<ProgramStatus, string>> = {
@@ -35,9 +36,10 @@ function isTemporal(outcome: ProgramOutcome): outcome is TemporalOutcome {
 }
 
 export function describeProgramOutcome(outcome: ProgramOutcome): string {
+  const where = outcome.frame === undefined ? "" : ` · in ${outcome.frame}`;
   if (!isTemporal(outcome)) {
-    return describeOutcome(outcome);
+    return `${describeOutcome(outcome)}${where}`;
   }
   const { x, y, z } = outcome.at;
-  return `진단: ${PROGRAM_LABELS[outcome.status]} (${outcome.status}) · ${outcome.steps}보 · (${x},${y},${z}): ${outcome.message}`;
+  return `진단: ${PROGRAM_LABELS[outcome.status]} (${outcome.status}) · ${outcome.steps}보 · (${x},${y},${z}): ${outcome.message}${where}`;
 }
