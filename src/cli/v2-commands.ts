@@ -1,11 +1,11 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { Command } from "commander";
 import { loadDocument } from "../container/document";
-import { compileProgram } from "../semantics/program";
+import { compileProgram, type ModuleResolver } from "../semantics/program";
 import { runProgram } from "../runtime/interpreter";
 import { formatProgramTrace } from "../runtime/program-trace";
-import { formatProgramIr } from "../ir/print";
+import { formatCompiledIr } from "../ir/print";
 import { describeProgramOutcome, PROGRAM_EXIT_CODES } from "../runtime/program-outcome";
 import { packDocument, unpackDocument, type FileMap } from "../container/pack";
 import { formatDocument } from "../format/formatter";
@@ -35,11 +35,19 @@ function loadOrExit(filePath: string, source = readFileSync(filePath, "utf8")) {
   return { ast: loaded.ast, space: loaded.space, manifest: loaded.manifest };
 }
 
+// Imports are paths relative to the importing file. A module is known by its path
+// relative to the working directory, which is also how its diagnostics name it.
+const fileModules: ModuleResolver = (path, from) => {
+  const full = resolve(from === null ? "." : dirname(from), path);
+  if (!existsSync(full) || !statSync(full).isFile()) return null;
+  return { path: relative(".", full), source: readFileSync(full, "utf8") };
+};
+
 // Loads and compiles a v2 program; prints every diagnostic and exits on errors.
 function compileOrExit(filePath: string, source?: string) {
   const { ast, space, manifest } = loadOrExit(filePath, source);
   if (!space || !manifest) process.exit(1);
-  const compiled = compileProgram(ast, space);
+  const compiled = compileProgram(ast, space, { path: relative(".", resolve(filePath)), resolve: fileModules });
   for (const diagnostic of compiled.diagnostics) {
     console.error(formatDiagnostic(diagnostic, filePath));
   }
@@ -52,6 +60,9 @@ export function runV2(filePath: string, source: string, options: { maxSteps?: nu
     fatal("v2 programs do not read input yet (듣는다 is not part of the present-tense core)");
   }
   const { program, manifest } = compileOrExit(filePath, source);
+  if (program.space.layers.length === 0) {
+    fatal(`${filePath} is a library module: it has callable planes and types but no volume to run`);
+  }
   const result = runProgram(program, manifest, { maxSteps: options.maxSteps });
   if (options.trace) {
     process.stdout.write(formatProgramTrace(result));
@@ -87,7 +98,8 @@ export function registerV2Commands(cli: Command): void {
       const { program } = compileOrExit(filePath);
       const layers = program.space.layers;
       const sizes = layers.map((layer) => `${layer.plane.width}×${layer.plane.height}`).join(", ");
-      console.log(`ok: ${layers.length} layer(s) [${sizes}]`);
+      const callables = program.procedures.size === 0 ? "" : `, ${program.procedures.size} callable plane(s)`;
+      console.log(layers.length === 0 ? `ok: library module${callables}` : `ok: ${layers.length} layer(s) [${sizes}]${callables}`);
     });
 
   cli
@@ -96,7 +108,7 @@ export function registerV2Commands(cli: Command): void {
     .argument("<file>", "path to a .y3 document")
     .action((filePath: string) => {
       const { program } = compileOrExit(filePath);
-      process.stdout.write(formatProgramIr(program.cells.values(), program.nouns));
+      process.stdout.write(formatCompiledIr(program));
     });
 
   cli

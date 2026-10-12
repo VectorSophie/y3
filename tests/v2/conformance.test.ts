@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { compileProgram, formatProgramIr, formatProgramTrace, formatType, hasErrors, loadDocument, runProgram } from "../../src/v2";
+import { dirname, join, normalize } from "node:path";
+import { compileProgram, formatCompiledIr, formatProgramTrace, formatType, hasErrors, loadDocument, runProgram, type ModuleResolver } from "../../src/v2";
 import { readRepoFile } from "./helpers";
 
 // The conformance set: programs with known results. A fixture runs once its milestone
@@ -7,7 +8,17 @@ import { readRepoFile } from "./helpers";
 // must match exactly. Fixtures for later milestones must still load, and must be
 // refused by the compiler only because they use what a later milestone adds.
 
-const IMPLEMENTED = new Set(["M2", "M3", "M4", "M5"]);
+const IMPLEMENTED = new Set(["M2", "M3", "M4", "M5", "M6"]);
+
+// Imports resolve relative to the importing file, inside the repository.
+const repoModules: ModuleResolver = (path, from) => {
+  const full = normalize(join(from === null ? "." : dirname(from), path));
+  try {
+    return { path: full, source: readRepoFile(full) };
+  } catch {
+    return null;
+  }
+};
 
 type Expectation = {
   path: string;
@@ -60,7 +71,7 @@ describe("conformance fixtures", () => {
       if (fixture.status === "REJECTED") {
         it(`is refused by check with ${(fixture.codes ?? []).join(", ")}`, () => {
           if (!loaded.ast || !loaded.space) throw new Error("expected a document");
-          const compiled = compileProgram(loaded.ast, loaded.space);
+          const compiled = compileProgram(loaded.ast, loaded.space, { path: fixture.path, resolve: repoModules });
           expect(compiled.program).toBeNull();
           expect(compiled.diagnostics.filter((d) => d.severity === "error").map((d) => d.code)).toEqual(fixture.codes);
         });
@@ -69,11 +80,11 @@ describe("conformance fixtures", () => {
 
       it(`runs to ${fixture.status} with output [${fixture.output.join(", ")}] in ${fixture.steps} steps`, () => {
         if (!loaded.ast || !loaded.space || !loaded.manifest) throw new Error("expected a document");
-        const compiled = compileProgram(loaded.ast, loaded.space);
+        const compiled = compileProgram(loaded.ast, loaded.space, { path: fixture.path, resolve: repoModules });
         expect(compiled.diagnostics).toEqual([]);
         if (!compiled.program) throw new Error("expected a program");
         if (fixture.ir) {
-          expect(formatProgramIr(compiled.program.cells.values(), compiled.program.nouns)).toBe(readRepoFile(fixture.ir));
+          expect(formatCompiledIr(compiled.program)).toBe(readRepoFile(fixture.ir));
         }
         for (const [name, type] of Object.entries(fixture.types ?? {})) {
           const noun = compiled.program.nouns.find((n) => n.name === name);

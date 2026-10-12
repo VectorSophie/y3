@@ -1,0 +1,15 @@
+# A symbol passes through a call and is determined after the frame is gone.
+⟦
+[값은 미정이다.]
+[결과는 하나더: 값]
+[결과를 말한다.]
+[값은 3이었다.]
+[끝이다.]
+⟧
+
+※
+
+:하나더: (수: Int) → Int ⟦
+[수에 1을 더한다.]
+[수를 돌려준다.]
+⟧

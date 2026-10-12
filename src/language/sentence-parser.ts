@@ -394,7 +394,6 @@ function pattern(text: string): PatternAst {
 // [N은 E에 따라: 패턴 → 값, …]
 function parseMatch(head: string[], tail: string, issues: SentenceIssue[]): ActAst {
   const usage = "a match is written '[N은 E에 따라: 패턴 → 값, …]'";
-  if (head.length !== 3) fail(SENTENCE_CODES.BAD_MATCH, usage);
   const target = phrase(head[0] ?? "", issues);
   const scrutinee = phrase(head[1] ?? "", issues);
   if (target.role !== "subject" || scrutinee.role !== "target") fail(SENTENCE_CODES.BAD_MATCH, usage);
@@ -420,7 +419,8 @@ function parseCall(words: string[], issues: SentenceIssue[]): ActAst {
   const colon = colonAt(text);
   const head = mergeGenitives(text.slice(0, colon).trim().split(" ").filter((w) => w.length > 0));
   const tail = text.slice(colon + 1).trim();
-  if (head[head.length - 1] === "따라") return parseMatch(head, tail, issues);
+  // [N은 E에 따라: …] is a match; a callable plane may still be called 따라.
+  if (head.length === 3 && head[2] === "따라" && (head[1] ?? "").endsWith("에")) return parseMatch(head, tail, issues);
   const args = tail.length === 0 ? [] : splitTop(tail, ",");
   if (args.some((arg) => arg.length === 0)) fail(SENTENCE_CODES.BAD_CALL, `an argument is missing: ${usage}`);
 

@@ -45,7 +45,7 @@ export function formatExpr(e: Expr, nouns: ReadonlyMap<number, string>): string 
       case "Construct":
         return `${e.variant ?? e.typeName}(${e.args.map(sub).join(", ")})`;
       case "Field":
-        return `${sub(e.record)}.${e.field}`;
+        return `Field(${sub(e.record)}, ${e.field})`;
       case "Match":
         return `Match ${sub(e.scrutinee)} { ${e.arms.map((arm) => `${formatPattern(arm.pattern)} => ${sub(arm.body)}`).join("; ")} }`;
       case "SetField":

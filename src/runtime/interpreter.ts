@@ -615,8 +615,11 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
   const ended: ProgramOutcome = finalStop
     ? { status: finalStop.status, steps: state.steps, at: lastAt, message: finalStop.message }
     : (state.outcome as ProgramOutcome);
-  // An outcome inside a call says which activation it happened in.
-  const outcome: ProgramOutcome = lastFrame === null ? ended : { ...ended, frame: lastFrame };
+  // An outcome inside a call says which activation it happened in: where the pointer
+  // went for VOID and STEP_LIMIT (their positions are the next pose), where the cell ran
+  // for the rest.
+  const label = !finalStop && (ended.status === "VOID" || ended.status === "STEP_LIMIT") ? frame.label : lastFrame;
+  const outcome: ProgramOutcome = label === null ? ended : { ...ended, frame: label };
 
   const values = new Map<string, ConcreteValue>();
   for (const [noun, v] of main.current) {

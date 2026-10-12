@@ -1,0 +1,20 @@
+(0,0,0) 4:1  CallPlane main.합차(17 : Int, 5 : Int) → 합#1, 차#2
+(0,1,0) 5:1  Eval Call std.io.println(합#1 : Int) : Unit
+(0,2,0) 6:1  Eval Call std.io.println(차#2 : Int) : Unit
+(0,3,0) 7:1  End
+nouns:
+  합#1 : Int
+  차#2 : Int
+
+main.합차(가#3: Int, 나#4: Int) → (Int, Int)
+(0,0,0) :합차: 13:1  StoreNoun 합#5 ← 가#3 : Int
+(0,1,0) :합차: 14:1  StoreNoun 합#5 ← Add(합#5 : Int, 나#4 : Int) : Int
+(0,2,0) :합차: 15:1  Turn left
+(1,2,0) :합차: 15:16  StoreNoun 차#6 ← 가#3 : Int
+(2,2,0) :합차: 15:26  StoreNoun 차#6 ← Sub(차#6 : Int, 나#4 : Int) : Int
+(3,2,0) :합차: 15:39  Return 합#5 : Int, 차#6 : Int
+nouns:
+  가#3 : Int
+  나#4 : Int
+  합#5 : Int
+  차#6 : Int

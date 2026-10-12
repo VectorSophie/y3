@@ -1,0 +1,12 @@
++++
+[imports]
+"기하" = "lib/geometry.y3"
++++
+
+# A module is a namespace: 기하 점 and 기하 둘레 are its type and its callable plane.
+⟦
+[p는 기하 점: 3, 4]
+[d는 기하 둘레: p]
+[d를 말한다.]
+[끝이다.]
+⟧
