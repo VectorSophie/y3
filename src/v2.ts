@@ -43,3 +43,4 @@ export * from "./runtime/program-outcome";
 export * from "./temporal/terms";
 export * from "./temporal/solver";
 export * from "./temporal/store";
+export * from "./compiler/cfg";

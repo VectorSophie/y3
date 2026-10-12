@@ -72,15 +72,18 @@ export function step(state: MachineState, decode: Decoder): StepResult {
 
   // A call or a return moves the pointer into another space.
   const nextSpace = instruction.op === "call" || instruction.op === "return" ? instruction.space : space;
-  let outcome: Outcome | null = null;
-  if (isEnd) {
-    outcome = { status: "HALT", steps, at: position };
-  } else if (lookup(nextSpace, next.position.x, next.position.y, next.position.z).kind === "void") {
-    outcome = { status: "VOID", steps, at: next.position, from: position };
-  } else if (steps >= state.maxSteps) {
-    outcome = { status: "STEP_LIMIT", steps, pose: next };
-  }
+  const nextIsVoid = lookup(nextSpace, next.position.x, next.position.y, next.position.z).kind === "void";
+  const outcome = stepOutcome(steps, state.maxSteps, position, next, isEnd, nextIsVoid);
   return { state: { ...state, space: nextSpace, pose: next, steps, outcome }, entry };
+}
+
+// How a completed step ends the run, if it does: the one rule for every engine. An
+// end cell halts; otherwise moving into VOID is VOID; otherwise the step limit.
+export function stepOutcome(steps: number, maxSteps: number, position: Pose["position"], next: Pose, isEnd: boolean, nextIsVoid: boolean): Outcome | null {
+  if (isEnd) return { status: "HALT", steps, at: position };
+  if (nextIsVoid) return { status: "VOID", steps, at: next.position, from: position };
+  if (steps >= maxSteps) return { status: "STEP_LIMIT", steps, pose: next };
+  return null;
 }
 
 export type RunResult = { readonly outcome: Outcome; readonly state: MachineState; readonly trace: TraceEntry[] };
