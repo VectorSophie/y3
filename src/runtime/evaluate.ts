@@ -1,6 +1,9 @@
-import { callable } from "../ir/callables";
-import type { CallableId, Expr, Moment, NounId, Pattern } from "../ir/hir";
-import { bool, elementsOf, int, sameValue, type ConcreteValue } from "../semantics/values";
+import { callable, type Callable, type CallTypes } from "../ir/callables";
+import type { Expr, Moment, NounId, Pattern } from "../ir/hir";
+import { bool, elementsOf, float, int, sameValue, UNIT, type ConcreteValue } from "../semantics/values";
+import { RuntimeFault } from "../semantics/fault";
+import { numericType, order, type ArithOp } from "../semantics/numeric";
+import type { NumericName } from "../types/types";
 import type { SymbolicTerm } from "../temporal/terms";
 
 // Evaluation of typed IR expressions. A value is concrete, or (for Int and Text only)
@@ -13,20 +16,19 @@ export type Value = { readonly kind: "concrete"; readonly value: ConcreteValue }
 export interface EvalEnv {
   load(noun: NounId): Value;
   anchor(noun: NounId, moment: Moment): Value;
-  // Add or subtract; handles symbolic operands.
-  arithmetic(left: Value, right: Value, sign: 1n | -1n): Value;
-  // An effect callable (output). Its arguments may be symbolic.
-  effect(callee: CallableId, args: readonly Value[]): Value;
+  // Arithmetic of this numeric type; the environment handles symbolic operands.
+  arithmetic(op: ArithOp, type: NumericName, left: Value, right: Value): Value;
+  // Standard output: the one effect whose value may still be symbolic (the write is held).
+  output(value: Value, newline: boolean): void;
+  // Any other effect, with concrete arguments, through the host.
+  effect(target: Callable & { kind: "effect" }, args: readonly ConcreteValue[], types: CallTypes): ConcreteValue;
   // A value needed now: concrete, or the environment stops (it throws).
   now(value: Value, purpose: string): ConcreteValue;
 }
 
 export const concrete = (value: ConcreteValue): Value => ({ kind: "concrete", value });
 
-// An ordinary run-time error the program itself caused (an index out of range): the
-// run ends with FAULT. Distinct from the plain Errors below, which mean the type checker
-// let through something it should not have.
-export class RuntimeFault extends Error {}
+export { RuntimeFault };
 
 // Data values (variants, records, arrays) are concrete for now: building one from an
 // open temporal symbol needs that symbol's value now, so the run is UNRESOLVED.
@@ -82,7 +84,8 @@ export function evaluate(e: Expr, env: EvalEnv, locals: ReadonlyMap<string, Conc
   const needed = (x: Expr, purpose: string) => env.now(sub(x), purpose);
   switch (e.node) {
     case "Literal":
-      return concrete(e.value);
+      // A float literal is rounded to its type's width.
+      return concrete(e.value.kind === "float" && e.type.kind === "prim" && e.type.name === "f32" ? float(e.value.value, 32) : e.value);
     case "LoadNoun":
       return env.load(e.noun);
     case "LoadLocal": {
@@ -93,9 +96,16 @@ export function evaluate(e: Expr, env: EvalEnv, locals: ReadonlyMap<string, Conc
     case "TemporalAnchorRead":
       return env.anchor(e.noun, e.moment);
     case "Add":
-    case "Sub": {
+    case "Sub":
+    case "Mul":
+    case "Div": {
       const left = sub(e.left);
-      return env.arithmetic(left, sub(e.right), e.node === "Add" ? 1n : -1n);
+      const op = ({ Add: "add", Sub: "sub", Mul: "mul", Div: "div" } as const)[e.node];
+      return env.arithmetic(op, numericType(e.type), left, sub(e.right));
+    }
+    case "Compare": {
+      const left = needed(e.left, "this comparison");
+      return concrete(bool(order(e.op, left, needed(e.right, "this comparison"))));
     }
     case "Eq": {
       const left = needed(e.left, "this comparison");
@@ -108,8 +118,14 @@ export function evaluate(e: Expr, env: EvalEnv, locals: ReadonlyMap<string, Conc
     case "Call": {
       const target = callable(e.callee);
       const args = e.args.map(sub);
-      if (target.kind === "effect") return env.effect(e.callee, args);
-      return concrete(target.apply(args.map((arg) => env.now(arg, `'${target.namespace} ${target.name}'`))));
+      if (target.kind === "output") {
+        env.output(args[0] as Value, target.newline);
+        return concrete(UNIT);
+      }
+      // Everything else needs its arguments now: the present never waits for the future.
+      const values = args.map((arg) => env.now(arg, `'${target.namespace} ${target.name}'`));
+      const types = { args: e.args.map((a) => a.type), result: e.type };
+      return concrete(target.kind === "pure" ? target.apply(values, types) : env.effect(target, values, types));
     }
     case "Construct":
       return concrete({ kind: "data", type: e.typeName, variant: e.variant, fields: e.args.map((arg) => needed(arg, "a data value")) });
@@ -134,10 +150,10 @@ export function evaluate(e: Expr, env: EvalEnv, locals: ReadonlyMap<string, Conc
     }
     case "SetIndex": {
       const base = needed(e.base, "an element");
-      if (base.kind !== "array") throw new Error("only an array's element can be written; the type checker should have caught this");
+      if (base.kind !== "array" && base.kind !== "list") throw new Error("only an array's or a list's element can be written; the type checker should have caught this");
       const elements = [...base.elements];
       elements[position(needed(e.index, "an index"), elements.length, "element")] = needed(e.value, "an array");
-      return concrete({ kind: "array", elements });
+      return concrete({ kind: base.kind, elements });
     }
     case "Slice": {
       const base = needed(e.base, "a slice");

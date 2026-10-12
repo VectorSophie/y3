@@ -1,4 +1,5 @@
 import type { Compass, Relative, Turn } from "../space/orientation";
+import type { NumericName } from "../types/types";
 
 // The sentences Y3 understands, as parsed from Korean. Present-tense sentences are
 // acts; past and future sentences are relations (M3). Nothing here is executable;
@@ -7,7 +8,10 @@ import type { Compass, Relative, Turn } from "../space/orientation";
 export type TimeAnchor = "처음" | "끝";
 
 export type ExprAst =
-  | { readonly kind: "int"; readonly value: bigint }
+  // A numeric literal may end with its type: 255u8, -1i128, 10bigint, 1.5f32.
+  | { readonly kind: "int"; readonly value: bigint; readonly suffix?: NumericName }
+  | { readonly kind: "float"; readonly value: number; readonly suffix?: NumericName }
+  | { readonly kind: "rune"; readonly value: number } // '가', '\n'; a Unicode scalar value
   | { readonly kind: "text"; readonly value: string }
   | { readonly kind: "bool"; readonly value: boolean } // 참, 거짓
   | { readonly kind: "noun"; readonly name: string } // a noun, or a constructor with no fields (None)
@@ -32,13 +36,20 @@ export type CallReading = {
   // Orthography lint for this reading's particles, reported only if it is chosen.
   readonly lint: readonly { readonly code: string; readonly severity: "error" | "warning"; readonly message: string }[];
 };
-export type CallAst = { readonly kind: "call"; readonly readings: readonly CallReading[]; readonly args: readonly ExprAst[] };
+// `fields`: the names of named arguments ([점: 가로=3, 세로=4]), in the order written;
+// null for positional arguments. A call uses one style or the other, never both.
+export type CallAst = {
+  readonly kind: "call";
+  readonly readings: readonly CallReading[];
+  readonly args: readonly ExprAst[];
+  readonly fields: readonly string[] | null;
+};
 
 // A pattern in a match arm: _, a literal, or a name with optional sub-patterns. Whether
 // a bare name binds a local or names a constructor (None) is decided by name resolution.
 export type PatternAst =
   | { readonly kind: "wildcard" }
-  | { readonly kind: "literal"; readonly value: ExprAst & { readonly kind: "int" | "text" | "bool" } }
+  | { readonly kind: "literal"; readonly value: ExprAst & { readonly kind: "int" | "text" | "bool" | "rune" } }
   | { readonly kind: "name"; readonly path: readonly string[]; readonly args: readonly PatternAst[] | null };
 
 // [N은 E에 따라: 패턴 → 값, …]
@@ -56,6 +67,8 @@ export type ActAst =
   | { readonly kind: "declare"; readonly noun: string } // N은 미정이다
   | { readonly kind: "add"; readonly place: PlaceAst; readonly amount: ExprAst } // N에 E을 더한다
   | { readonly kind: "subtract"; readonly place: PlaceAst; readonly amount: ExprAst } // N에서 E을 뺀다
+  | { readonly kind: "multiply"; readonly place: PlaceAst; readonly amount: ExprAst } // N에 E을 곱한다
+  | { readonly kind: "divide"; readonly place: PlaceAst; readonly amount: ExprAst } // N을 E로 나눈다
   | { readonly kind: "say"; readonly value: ExprAst } // E을 말한다
   | { readonly kind: "receive"; readonly noun: string } // N이 다음에서 온다
   | { readonly kind: "send"; readonly noun: string } // N을 전으로 보낸다
@@ -73,6 +86,13 @@ export type RelationAst =
   | { readonly kind: "promise"; readonly noun: string; readonly anchor: TimeAnchor | null; readonly value: ExprAst } // (끝의) N은 E일 것이다
   | { readonly kind: "fixed" }; // 처음은 끝이었다
 
-export type ConditionAst = { readonly left: ExprAst; readonly right: ExprAst; readonly negated: boolean };
+// N이 E이면, N이 E이 아니면; or an ordering: N이 E보다 크면 (gt), 작으면 (lt),
+// 크거나 같으면 (ge), 작거나 같으면 (le).
+export type ConditionAst = {
+  readonly left: ExprAst;
+  readonly right: ExprAst;
+  readonly negated: boolean;
+  readonly order?: "lt" | "le" | "gt" | "ge";
+};
 
 export type SentenceAst = ActAst | RelationAst | { readonly kind: "when"; readonly condition: ConditionAst; readonly then: ActAst };

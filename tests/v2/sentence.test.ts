@@ -186,7 +186,6 @@ describe("temporal cycles (M4)", () => {
 describe("forms outside the core are recognised, not run", () => {
   const later: [string, string][] = [
     ["결과가 0일 것이라면 남쪽을 본다.", CODES.TEMPORAL_LATER],
-    ["값에 2를 곱한다.", CODES.FEATURE_LATER],
     ["값을 듣는다.", CODES.FEATURE_LATER],
     ["값에 1을 더했다.", CODES.VERB_TENSE],
     ["값에 1을 더할 것이다.", CODES.VERB_TENSE],

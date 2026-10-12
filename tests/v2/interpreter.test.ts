@@ -37,14 +37,14 @@ describe("values", () => {
   it("never compare an integer with text: Eq<T> needs one T, checked before the run (M5)", () => {
     const { compiled } = compile(column('값은 "3"이다.', "값이 3이면 왼쪽을 본다.", "끝이다."));
     expect(compiled.program).toBeNull();
-    expect(compiled.diagnostics.map((d) => d.message)).toEqual(["[값이 3이면 왼쪽을 본다.] cannot compare Text with Int"]);
+    expect(compiled.diagnostics.map((d) => d.message)).toEqual(["[값이 3이면 왼쪽을 본다.] cannot compare Text with {integer}"]);
   });
 
   it("refuse arithmetic on text before the run, not as a fault in it (M5)", () => {
     const { compiled } = compile(column('값은 "셋"이다.', "값에 1을 더한다.", "끝이다."));
     expect(compiled.program).toBeNull();
     expect(compiled.diagnostics.map((d) => d.code)).toContain("Y3Y001");
-    expect(compiled.diagnostics[0]?.message).toBe("[값에 1을 더한다.] a value in arithmetic must be Int, not Text");
+    expect(compiled.diagnostics[0]?.message).toBe("[값에 1을 더한다.] arithmetic needs two values of one type, not Text and {integer}; convert one explicitly ('변환 …')");
   });
 
   it("fault when a noun is read before this run gave it a value", () => {

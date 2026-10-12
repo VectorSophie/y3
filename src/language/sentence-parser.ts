@@ -1,5 +1,6 @@
 import type { Compass, Relative, Turn } from "../space/orientation";
 import { canonicalParticle, endingOf, type ParticlePair } from "./korean";
+import type { NumericName } from "../types/types";
 import type { ActAst, CallAst, CallReading, ConditionAst, ExprAst, MatchAst, PatternAst, PlaceAst, PlaceStep, RelationAst, SentenceAst, TimeAnchor } from "./sentence-ast";
 
 // Parses one cell's sentence. Tense is read from the sentence-final form: present
@@ -89,16 +90,51 @@ export const RESERVED_WORDS = new Set([
   ...Object.keys(FLOOR_WORDS),
 ]);
 
-const PRESENT_VERBS = new Set(["더한다", "뺀다", "말한다", "본다", "간다", "온다", "보낸다", "돌려준다", "돌아간다"]);
+const PRESENT_VERBS = new Set(["더한다", "뺀다", "곱한다", "나눈다", "말한다", "본다", "간다", "온다", "보낸다", "돌려준다", "돌아간다"]);
 const LATER_VERBS: Readonly<Record<string, string>> = {
-  곱한다: "multiplication",
-  나눈다: "division",
-  듣는다: "input",
+  듣는다: "input (use '표준 줄읽기')",
 };
 const TIME_WORDS = new Set(["처음", "끝", "여기", "전", "다음"]);
 const PAST_VERB_ENDINGS = ["했다", "뺐다", "갔다", "봤다", "보았다", "들었다", "왔다", "냈다"];
 
 const NOUN_PATTERN = /^[\p{L}_][\p{L}\p{N}_]*$/u;
+
+// Where the rune literal opening at `i` closes, or -1: one scalar or one escape.
+function runeEnd(text: string, i: number): number {
+  const width = text[i + 1] === "\\" ? 2 : String.fromCodePoint(text.codePointAt(i + 1) ?? 0).length;
+  return text[i + 1] !== undefined && text[i + 1 + width] === "'" ? i + 1 + width : -1;
+}
+
+const NUMERIC_SUFFIX = "(i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|bigint|f32|f64)?";
+const INTEGER_LITERAL = new RegExp(`^(-?\\d+)${NUMERIC_SUFFIX}$`, "u");
+const FLOAT_LITERAL = new RegExp(`^(-?\\d+\\.\\d+(?:[eE][+-]?\\d+)?)${NUMERIC_SUFFIX}$`, "u");
+const RUNE_ESCAPES: Readonly<Record<string, string>> = { n: "\n", t: "\t", "\\": "\\", "'": "'" };
+
+// A numeric or rune literal, or null.
+function literal(stem: string): ExprAst | null {
+  const integer = stem.match(INTEGER_LITERAL);
+  if (integer) {
+    const suffix = integer[2] as NumericName | undefined;
+    if (suffix === "f32" || suffix === "f64") return { kind: "float", value: Number(integer[1]), suffix };
+    return suffix ? { kind: "int", value: BigInt(integer[1] ?? "0"), suffix } : { kind: "int", value: BigInt(integer[1] ?? "0") };
+  }
+  const real = stem.match(FLOAT_LITERAL);
+  if (real) {
+    const suffix = real[2] as NumericName | undefined;
+    if (suffix && suffix !== "f32" && suffix !== "f64") fail(SENTENCE_CODES.BAD_PHRASE, `'${stem}' is a float literal; it cannot be ${suffix}`);
+    return suffix ? { kind: "float", value: Number(real[1]), suffix } : { kind: "float", value: Number(real[1]) };
+  }
+  if (stem.startsWith("'") && stem.endsWith("'") && stem.length >= 3) {
+    const body = stem.slice(1, -1);
+    const char = body.startsWith("\\") ? RUNE_ESCAPES[body.slice(1)] : body;
+    const scalar = char === undefined ? undefined : char.codePointAt(0);
+    if (char === undefined || scalar === undefined || String.fromCodePoint(scalar) !== char) {
+      fail(SENTENCE_CODES.BAD_PHRASE, `'${stem}' is not a rune: write one character, or \\n \\t \\\\ \\'`);
+    }
+    return { kind: "rune", value: scalar };
+  }
+  return null;
+}
 
 // Splits a sentence (without its full stop) into eojeols; a quoted literal, with any
 // spaces inside it, stays inside one eojeol.
@@ -119,6 +155,11 @@ function eojeols(text: string): string[] {
     } else if (ch === " ") {
       if (current.length > 0) words.push(current);
       current = "";
+    } else if (ch === "'" && runeEnd(text, i) > 0) {
+      // A rune literal is one token even when it is a space: ' '.
+      const end = runeEnd(text, i);
+      current += text.slice(i, end + 1);
+      i = end;
     } else {
       current += ch;
       if (ch === '"') inQuote = true;
@@ -233,7 +274,8 @@ function expr(stem: string): ExprAst {
     }
     return target;
   }
-  if (/^-?\d+$/.test(stem)) return { kind: "int", value: BigInt(stem) };
+  const number = literal(stem);
+  if (number) return number;
   if (stem === "참" || stem === "거짓") return { kind: "bool", value: stem === "참" };
   if (stem.startsWith('"') && stem.endsWith('"') && stem.length >= 2) return { kind: "text", value: unquote(stem) };
   return { kind: "noun", name: noun(stem) };
@@ -378,9 +420,12 @@ function pattern(text: string): PatternAst {
   if (text === "_") return { kind: "wildcard" };
   const open = text.indexOf("(");
   const head = (open < 0 ? text : text.slice(0, open)).trim();
-  if (open < 0 && (/^-?\d+$/.test(head) || head.startsWith('"') || head === "참" || head === "거짓")) {
+  const number = open < 0 ? literal(head) : null;
+  if (number?.kind === "float") fail(SENTENCE_CODES.BAD_MATCH, `'${head}': floats are never patterns (NaN is not equal to itself); compare with 보다 instead`);
+  if (number?.kind === "int" && number.suffix) fail(SENTENCE_CODES.BAD_MATCH, `'${head}': a pattern literal takes the matched value's type; drop the suffix`);
+  if (open < 0 && (number || head.startsWith('"') || head === "참" || head === "거짓")) {
     const value = expr(head);
-    if (value.kind !== "int" && value.kind !== "text" && value.kind !== "bool") fail(SENTENCE_CODES.BAD_MATCH, usage);
+    if (value.kind !== "int" && value.kind !== "text" && value.kind !== "bool" && value.kind !== "rune") fail(SENTENCE_CODES.BAD_MATCH, usage);
     return { kind: "literal", value };
   }
   const path = head.split(" ").filter((w) => w.length > 0);
@@ -456,7 +501,12 @@ function parseCall(words: string[], issues: SentenceIssue[]): ActAst {
   }
   if (readings.length === 0 && twice) fail(SENTENCE_CODES.BAD_CALL, `'${twice}' would receive two results; each result needs its own noun`);
   if (readings.length === 0) fail(SENTENCE_CODES.BAD_CALL, usage);
-  const call: CallAst = { kind: "call", readings, args: args.map(expr) };
+  // Named arguments (가로=3, 세로=4) build a record by field name, in any order.
+  const NAMED = /^([\p{L}_][\p{L}\p{N}_]*)\s*=\s*(.+)$/u;
+  const named = args.map((arg) => (arg.startsWith('"') ? null : arg.match(NAMED)));
+  if (named.some((m) => m) && !named.every((m) => m)) fail(SENTENCE_CODES.BAD_CALL, "write every argument by name ('가로=3') or none");
+  const fields = named.every((m) => m) && named.length > 0 ? named.map((m) => m?.[1] ?? "") : null;
+  const call: CallAst = { kind: "call", readings, args: fields ? named.map((m) => expr((m?.[2] ?? "").trim())) : args.map(expr), fields };
   return { kind: "call", call };
 }
 
@@ -523,6 +573,14 @@ function parseAct(words: string[], issues: SentenceIssue[]): ActAst {
       expectRoles(last, found, ["source", "object"], "N에서 E을 뺀다");
       return { kind: "subtract", place: place(found.get("source")?.stem ?? ""), amount: expr(found.get("object")?.stem ?? "") };
     }
+    case "곱한다": {
+      expectRoles(last, found, ["target", "object"], "N에 E을 곱한다");
+      return { kind: "multiply", place: place(found.get("target")?.stem ?? ""), amount: expr(found.get("object")?.stem ?? "") };
+    }
+    case "나눈다": {
+      expectRoles(last, found, ["object", "direction"], "N을 E로 나눈다");
+      return { kind: "divide", place: place(found.get("object")?.stem ?? ""), amount: expr(found.get("direction")?.stem ?? "") };
+    }
     case "온다": {
       expectRoles(last, found, ["subject", "source"], "N이 다음에서 온다");
       if (found.get("source")?.stem !== "다음") {
@@ -568,9 +626,20 @@ function parseAct(words: string[], issues: SentenceIssue[]): ActAst {
   }
 }
 
+const ORDERS: Readonly<Record<string, "lt" | "le" | "gt" | "ge">> = { 크면: "gt", 작으면: "lt", "크거나 같으면": "ge", "작거나 같으면": "le" };
+
 function parseCondition(words: string[], issues: SentenceIssue[]): ConditionAst {
-  const usage = "a condition is written 'N이 E이면' or 'N이 E이 아니면'";
+  const usage = "a condition is written 'N이 E이면', 'N이 E이 아니면' or 'N이 E보다 크면' (작으면, 크거나 같으면, 작거나 같으면)";
   const last = words[words.length - 1] ?? "";
+  const ordering = last === "같으면" ? `${words[words.length - 2] ?? ""} 같으면` : last;
+  const op = ORDERS[ordering];
+  if (op) {
+    const head = words.slice(0, ordering === last ? -1 : -2);
+    if (head.length !== 2 || !(head[1] ?? "").endsWith("보다") || (head[1] ?? "").length <= 2) fail(SENTENCE_CODES.BAD_CONDITIONAL, usage);
+    const left = phrase(head[0] ?? "", issues);
+    if (left.role !== "subject") fail(SENTENCE_CODES.BAD_CONDITIONAL, usage);
+    return { left: expr(left.stem), right: expr((head[1] ?? "").slice(0, -"보다".length)), negated: false, order: op };
+  }
   if (last === "아니면") {
     if (words.length !== 3) fail(SENTENCE_CODES.BAD_CONDITIONAL, usage);
     const left = phrase(words[0] ?? "", issues);
@@ -585,7 +654,15 @@ function parseCondition(words: string[], issues: SentenceIssue[]): ConditionAst 
 }
 
 function isConditionEnd(word: string): boolean {
-  return word === "아니면" || (word.endsWith("이면") && word.length > 2) || word.endsWith("것이라면") || word.endsWith("었다면");
+  return (
+    word === "아니면" ||
+    word === "크면" ||
+    word === "작으면" ||
+    word === "같으면" ||
+    (word.endsWith("이면") && word.length > 2) ||
+    word.endsWith("것이라면") ||
+    word.endsWith("었다면")
+  );
 }
 
 export function parseSentence(text: string): SentenceResult {

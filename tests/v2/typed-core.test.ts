@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  arith,
   bool,
   BOOL,
   checkProgram,
@@ -10,7 +11,7 @@ import {
   formatType,
   hasErrors,
   int,
-  INT,
+  I64,
   loadDocument,
   matchPattern,
   named,
@@ -62,8 +63,9 @@ const errors = (...cells: string[]) =>
     .map((d) => `${d.code} ${d.message}`);
 
 describe("type inference", () => {
-  it("infers Int from arithmetic", () => {
-    expect(typeOf(["값은 미정이다.", "값에 1을 더한다.", "끝이다."], "값")).toBe("Int");
+  it("infers i64 for an ordinary integer, bigint for a temporal one (M7)", () => {
+    expect(typeOf(["값은 3이다.", "값에 1을 더한다.", "끝이다."], "값")).toBe("i64");
+    expect(typeOf(["값은 미정이다.", "값에 1을 더한다.", "끝이다."], "값")).toBe("bigint");
   });
 
   it("infers Text from testimony", () => {
@@ -71,7 +73,7 @@ describe("type inference", () => {
   });
 
   it("infers through copies, in either direction", () => {
-    expect(typeOf(["값은 미정이다.", "다른은 값이다.", "다른에 1을 더한다.", "끝이다."], "값")).toBe("Int");
+    expect(typeOf(["값은 미정이다.", "다른은 값이다.", "다른에 1을 더한다.", "끝이다."], "값")).toBe("bigint");
     expect(typeOf(["값은 다른이다.", "다른은 참이다.", "끝이다."], "값")).toBe("Bool"); // a later statement pins an earlier copy
   });
 
@@ -83,29 +85,29 @@ describe("type inference", () => {
   it("keeps type unknowns and value unknowns apart: the type is settled before the run, the value is not", () => {
     const { program, manifest } = compile("값은 미정이다.", "값에 1을 더한다.", "끝이다.");
     if (!program) throw new Error("expected a program");
-    expect(formatType(program.nouns[0]?.type ?? INT)).toBe("Int"); // Tα = Int, in the checker
+    expect(formatType(program.nouns[0]?.type ?? I64)).toBe("bigint"); // Tα = bigint, in the checker
     const result = runProgram(program, manifest);
     expect(result.symbols).toMatchObject([{ label: "α1", state: "declared", value: null }]); // α still open
   });
 });
 
 describe("static type errors", () => {
-  it("refuses Int against Text, naming where the type came from", () => {
+  it("refuses i64 against Text, naming where the type came from", () => {
     expect(errors("값은 3이다.", '값은 "셋"이다.', "끝이다.")).toEqual([
-      `Y3Y001 [값은 "셋"이다.] '값' holds Int since [값은 3이다.] (line 2), not Text`,
+      `Y3Y001 [값은 "셋"이다.] '값' holds {integer} since [값은 3이다.] (line 2), not Text`,
     ]);
   });
 
   it("allows no implicit conversion", () => {
-    expect(errors("값은 3이다.", "값이 참이면 끝이다.", "끝이다.")).toEqual(["Y3Y001 [값이 참이면 끝이다.] cannot compare Int with Bool"]);
-    expect(errors('값은 "3"이다.', "값이 3이면 끝이다.", "끝이다.")).toEqual(["Y3Y001 [값이 3이면 끝이다.] cannot compare Text with Int"]);
-    expect(errors("값은 참이다.", "값에 1을 더한다.", "끝이다.")[0]).toBe("Y3Y001 [값에 1을 더한다.] a value in arithmetic must be Int, not Bool");
-    expect(errors("값은 1이다.", '값에 "셋"을 더한다.', "끝이다.")).toEqual([`Y3Y001 [값에 "셋"을 더한다.] the amount must be Int, not Text`]);
+    expect(errors("값은 3이다.", "값이 참이면 끝이다.", "끝이다.")).toEqual(["Y3Y001 [값이 참이면 끝이다.] cannot compare {integer} with Bool"]);
+    expect(errors('값은 "3"이다.', "값이 3이면 끝이다.", "끝이다.")).toEqual(["Y3Y001 [값이 3이면 끝이다.] cannot compare Text with {integer}"]);
+    expect(errors("값은 참이다.", "값에 1을 더한다.", "끝이다.")[0]).toBe("Y3Y001 [값에 1을 더한다.] arithmetic needs two values of one type, not Bool and {integer}; convert one explicitly ('변환 …')");
+    expect(errors("값은 1이다.", '값에 "셋"을 더한다.', "끝이다.")).toEqual([`Y3Y001 [값에 "셋"을 더한다.] arithmetic needs two values of one type, not {integer} and Text; convert one explicitly ('변환 …')`]);
   });
 
-  it("keeps temporal values to Int and Text", () => {
+  it("keeps temporal values to i64 and Text", () => {
     expect(errors("값은 미정이다.", "값은 참이었다.", "끝이다.")).toEqual([
-      "Y3Y004 [값은 미정이다.] '값' is Bool; a temporal value (미정) must be Int or Text, the sorts the temporal solver knows",
+      "Y3Y004 [값은 미정이다.] '값' is Bool; a temporal value (미정) must be bigint or Text, the sorts the temporal solver knows",
     ]);
     expect(errors("값은 끝의 같음이다.", "같음은 참이다.", "끝이다.")[0]).toMatch(/^Y3Y004 .*끝의/);
     expect(errors("값이 다음에서 온다.", "값은 참이다.", "값을 전으로 보낸다.", "끝이다.")[0]).toMatch(/^Y3Y004 .*다음에서 온다/);
@@ -155,10 +157,10 @@ describe("colon calls", () => {
   });
 
   it("reject unknown callables, wrong arity and wrong argument types at check", () => {
-    expect(errors("수학 제곱근: 4", "끝이다.")).toEqual(["Y3Y002 [수학 제곱근: 4] '수학' has no callable '제곱근'; it has 절댓값, 최댓값"]);
+    expect(errors("수학 사인: 4", "끝이다.")).toEqual(["Y3Y002 [수학 사인: 4] '수학' has no callable '사인'; it has 절댓값, 최솟값, 최댓값, 범위, 나머지, 제곱근, 내림, 올림, 반올림"]);
     expect(errors("수학 최댓값: 4", "끝이다.")).toEqual(["Y3Y003 [수학 최댓값: 4] '수학 최댓값' takes 2 arguments, not 1"]);
-    expect(errors('수학 절댓값: "셋"', "끝이다.")).toEqual([`Y3Y001 [수학 절댓값: "셋"] argument 1 of '수학 절댓값' must be Int, not Text`]);
-    expect(errors("크기는 수학 절댓값: 3", "크기는 참이다.", "끝이다.")[0]).toMatch(/^Y3Y001 .*'크기' holds Int/);
+    expect(errors('수학 절댓값: "셋"', "끝이다.")).toEqual([`Y3Y001 [수학 절댓값: "셋"] argument 1 of '수학 절댓값' must be {number}, not Text`]);
+    expect(errors("크기는 수학 절댓값: 3", "크기는 참이다.", "끝이다.")[0]).toMatch(/^Y3Y001 .*'크기' holds \{integer\}/);
   });
 
   it("need concrete arguments: a pure call on an open symbol is UNRESOLVED, like a branch", () => {
@@ -288,8 +290,12 @@ describe("algebraic data types", () => {
     anchor: () => {
       throw new Error("no time");
     },
-    arithmetic: (a, b, sign) => concrete(int(((a.kind === "concrete" && a.value.kind === "int" && a.value.value) || 0n) + sign * ((b.kind === "concrete" && b.value.kind === "int" && b.value.value) || 0n))),
-    effect: () => concrete({ kind: "unit" }),
+    arithmetic: (op, type, a, b) => {
+      if (a.kind !== "concrete" || b.kind !== "concrete") throw new Error("symbolic");
+      return concrete(arith(op, type, a.value, b.value));
+    },
+    output: () => {},
+    effect: () => ({ kind: "unit" }),
     now: (v) => {
       if (v.kind !== "concrete") throw new Error("symbolic");
       return v.value;
@@ -301,7 +307,7 @@ describe("algebraic data types", () => {
   };
 
   it("builds Option and Result: there is no null", () => {
-    expect(typecheck(make("Option", "Some", lit(int(3n))))).toEqual({ type: "Option<Int>", errors: [] });
+    expect(typecheck(make("Option", "Some", lit(int(3n))))).toEqual({ type: "Option<i64>", errors: [] });
     expect(typecheck(make("Option", "None")).type).toMatch(/^Option<\?T\d+>$/); // T stays open
     expect(typecheck(make("Result", "Err", lit(text("없음"))))).toMatchObject({ type: expect.stringMatching(/^Result<\?T\d+, Text>$/) });
     expect(value(make("Option", "Some", lit(int(3n))))).toEqual({ kind: "data", type: "Option", variant: "Some", fields: [int(3n)] });
@@ -309,14 +315,14 @@ describe("algebraic data types", () => {
 
   it("type-checks fields against the variant", () => {
     const pair = { node: "Eq", left: make("Option", "Some", lit(int(1n))), right: make("Option", "Some", lit(text("a"))), type: PENDING, at } as Expr;
-    expect(typecheck(pair).errors).toEqual(["Y3Y001 cannot compare Option<Int> with Option<Text>"]);
+    expect(typecheck(pair).errors).toEqual(["Y3Y001 cannot compare Option<{integer}> with Option<Text>"]);
     expect(typecheck(make("Option", "Maybe")).errors).toEqual(["Y3Y006 'Option' has no variant 'Maybe'; it has Some, None"]);
     expect(typecheck(make("Option", "Some")).errors).toEqual(["Y3Y003 'Some' has 1 field, not 0"]);
   });
 
   it("matches by pattern, binding locals for the arm", () => {
     const unwrap = (scrutinee: Expr) => match(scrutinee, [some(bind("x")), local("x")], [none, lit(int(0n))]);
-    expect(typecheck(unwrap(make("Option", "Some", lit(int(3n)))))).toEqual({ type: "Int", errors: [] });
+    expect(typecheck(unwrap(make("Option", "Some", lit(int(3n)))))).toEqual({ type: "i64", errors: [] });
     expect(value(unwrap(make("Option", "Some", lit(int(3n)))))).toEqual(int(3n));
     expect(value(unwrap(make("Option", "None")))).toEqual(int(0n));
   });
@@ -357,7 +363,7 @@ describe("algebraic data types", () => {
       expect(typecheck(match(make("Option", "None"))).errors).toEqual(["Y3Y005 this match does not cover _"]);
     });
 
-    it("needs a catch-all under Int and Text, whatever the literals", () => {
+    it("needs a catch-all under i64 and Text, whatever the literals", () => {
       const someInt = make("Option", "Some", lit(int(1n)));
       const one: Pattern = { kind: "literal", value: int(1n) };
       expect(typecheck(match(someInt, [some(one), lit(int(1n))], [none, lit(int(0n))])).errors).toEqual(["Y3Y005 this match does not cover Some(_)"]);
@@ -395,21 +401,21 @@ describe("algebraic data types", () => {
 
   it("requires every arm to have the same type", () => {
     expect(typecheck(match(make("Option", "None"), [some(bind("x")), lit(int(1n))], [none, lit(text("영"))])).errors).toEqual([
-      "Y3Y001 every arm of a match must be Int, not Text",
+      "Y3Y001 every arm of a match must be {integer}, not Text",
     ]);
   });
 
   it("supports product types: records with named fields", () => {
     const table = new TypeTable();
-    table.define({ kind: "product", name: "점", params: [], fields: [{ name: "x", type: INT }, { name: "y", type: INT }] });
+    table.define({ kind: "product", name: "점", params: [], fields: [{ name: "x", type: I64 }, { name: "y", type: I64 }] });
     const point = make("점", null, lit(int(1n)), lit(int(2n)));
     const y: Expr = { node: "Field", record: point, field: "y", index: -1, type: PENDING, at };
-    expect(typecheck(y, table)).toEqual({ type: "Int", errors: [] });
+    expect(typecheck(y, table)).toEqual({ type: "i64", errors: [] });
     expect(value(y)).toEqual(int(2n));
     const z: Expr = { node: "Field", record: make("점", null, lit(int(1n)), lit(int(2n))), field: "z", index: -1, type: PENDING, at };
     expect(typecheck(z, table).errors).toEqual(["Y3Y006 '점' has no field 'z'; it has x, y"]);
     const destructure = match(point, [{ kind: "record", type: "점", fields: [bind("a"), { kind: "wildcard" }] }, local("a")]);
-    expect(typecheck(destructure, table)).toEqual({ type: "Int", errors: [] });
+    expect(typecheck(destructure, table)).toEqual({ type: "i64", errors: [] });
   });
 
   describe("bind each name once per pattern", () => {
@@ -423,7 +429,7 @@ describe("algebraic data types", () => {
     it("accepts distinct names: Some(x), Pair(x, y)", () => {
       expect(typecheck(match(make("Option", "Some", lit(int(1n))), [some(bind("x")), local("x")], [none, lit(int(0n))])).errors).toEqual([]);
       const both = match(make("Pair", "Pair", lit(int(1n)), lit(int(2n))), [pair(bind("x"), bind("y")), local("y")]);
-      expect(typecheck(both, pairs())).toEqual({ type: "Int", errors: [] });
+      expect(typecheck(both, pairs())).toEqual({ type: "i64", errors: [] });
     });
 
     it("refuses the same name twice in one variant pattern: Pair(x, x)", () => {
@@ -435,24 +441,24 @@ describe("algebraic data types", () => {
       const body = local("x");
       const mixed = match(make("Pair", "Pair", lit(int(1n)), lit(text("둘"))), [pair(bind("x"), bind("x")), body]);
       expect(typecheck(mixed, pairs()).errors).toEqual(["Y3Y007 'x' is bound twice in one pattern; each name may be bound once"]);
-      expect(formatType(body.type)).toBe("Int"); // x is the Int field, never the Text one
+      expect(formatType(body.type)).toBe("i64"); // x is the i64 field, never the Text one
     });
 
     it("refuses the same name twice in a nested pattern: Pair(Some(x), x)", () => {
       const nested = match(make("Pair", "Pair", make("Option", "Some", lit(int(1n))), lit(int(2n))), [pair(some(bind("x")), bind("x")), local("x")], [{ kind: "wildcard" }, lit(int(0n))]);
       expect(typecheck(nested, pairs()).errors).toEqual(["Y3Y007 'x' is bound twice in one pattern; each name may be bound once"]);
       const record = new TypeTable();
-      record.define({ kind: "product", name: "점", params: [], fields: [{ name: "x", type: INT }, { name: "y", type: INT }] });
+      record.define({ kind: "product", name: "점", params: [], fields: [{ name: "x", type: I64 }, { name: "y", type: I64 }] });
       const inRecord = match(make("점", null, lit(int(1n)), lit(int(2n))), [{ kind: "record", type: "점", fields: [bind("a"), bind("a")] }, local("a")]);
       expect(typecheck(inRecord, record).errors).toEqual(["Y3Y007 'a' is bound twice in one pattern; each name may be bound once"]);
     });
 
     it("allows the same name in separate arms, and an inner match to shadow an outer one", () => {
       const arms = match(make("Pair", "Pair", lit(int(1n)), lit(int(2n))), [pair(bind("x"), { kind: "literal", value: int(0n) }), local("x")], [pair({ kind: "wildcard" }, bind("x")), local("x")]);
-      expect(typecheck(arms, pairs())).toEqual({ type: "Int", errors: [] });
+      expect(typecheck(arms, pairs())).toEqual({ type: "i64", errors: [] });
       expect(value(arms)).toEqual(int(2n)); // the second arm matched, with its own x
       const inner = match(make("Option", "Some", lit(int(7n))), [some(bind("x")), match(make("Option", "Some", local("x")), [some(bind("x")), local("x")], [none, lit(int(0n))])], [none, lit(int(0n))]);
-      expect(typecheck(inner)).toEqual({ type: "Int", errors: [] });
+      expect(typecheck(inner)).toEqual({ type: "i64", errors: [] });
       expect(value(inner)).toEqual(int(7n));
     });
 
@@ -463,10 +469,10 @@ describe("algebraic data types", () => {
     });
   });
 
-  it("nest: Result<Option<Int>, Text>", () => {
+  it("nest: Result<Option<i64>, Text>", () => {
     const nested = make("Result", "Ok", make("Option", "Some", lit(int(5n))));
     const result = typecheck(nested);
-    expect(result.type).toMatch(/^Result<Option<Int>, \?T\d+>$/);
+    expect(result.type).toMatch(/^Result<Option<i64>, \?T\d+>$/);
     const pick = match(nested, [{ kind: "variant", type: "Result", variant: "Ok", fields: [some(bind("n"))] }, local("n")], [{ kind: "wildcard" }, lit(int(0n))]);
     expect(value(pick)).toEqual(int(5n));
   });
@@ -482,8 +488,8 @@ describe("the unifier", () => {
   it("solves through type arguments", () => {
     const u = new Unifier();
     const t = u.fresh();
-    expect(u.unify(named("Option", t), named("Option", INT))).toBeNull();
-    expect(u.resolve(t)).toEqual(INT);
+    expect(u.unify(named("Option", t), named("Option", I64))).toBeNull();
+    expect(u.resolve(t)).toEqual(I64);
   });
 
   it("checks whole programs through checkProgram, independently of the runtime", () => {

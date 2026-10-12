@@ -1,8 +1,29 @@
 import type { Diagnostic } from "../language/diagnostics";
 import { callable } from "../ir/callables";
+import { templateParts } from "../stdlib/io";
 import type { Expr, Noun, NounId, Pattern, PlaneId, Provenance, Stmt } from "../ir/hir";
 import type { ConcreteValue } from "../semantics/values";
-import { arrayOf, BOOL, formatType, INT, named, sliceOf, substituteParams, TEXT, TypeTable, Unifier, UNIT_TYPE, type Type } from "./types";
+import {
+  arrayOf,
+  BIGINT,
+  BOOL,
+  formatType,
+  I64,
+  integerRange,
+  isInteger,
+  named,
+  prim,
+  RUNE,
+  sliceOf,
+  substituteParams,
+  TEXT,
+  TypeTable,
+  Unifier,
+  UNIT_TYPE,
+  F64,
+  type NumericName,
+  type Type,
+} from "./types";
 
 // The type checker. It walks the HIR once, in source order, unifying as it goes, then
 // writes the solved type onto every expression and noun. Inference is local and
@@ -24,6 +45,8 @@ export const TYPE_CODES = {
   DUPLICATE_BINDING: "Y3Y007",
   UNREACHABLE_ARM: "Y3Y008",
   RETURN_OUTSIDE: "Y3C001",
+  LITERAL_RANGE: "Y3N001",
+  NOT_A_KEY: "Y3N002",
 } as const;
 
 // What a body's checker needs to know beyond its own nouns: the signatures of the
@@ -89,6 +112,8 @@ export class TypeChecker {
   private readonly temporal: TemporalUse[] = [];
   private readonly locals: Map<string, Type>[] = [];
   private readonly reported = new Set<string>();
+  private readonly literals: { readonly value: bigint; readonly type: Type; readonly at: Provenance }[] = []; // range-checked at finish
+  private readonly keys: { readonly type: Type; readonly at: Provenance; readonly what: string }[] = []; // must be key types
 
   constructor(
     private readonly nouns: ReadonlyMap<NounId, Noun>,
@@ -117,7 +142,7 @@ export class TypeChecker {
   }
 
   private show(type: Type): string {
-    return formatType(this.u.resolve(type));
+    return this.u.describe(type);
   }
 
   // The noun must have this type.
@@ -130,7 +155,7 @@ export class TypeChecker {
       this.report(TYPE_CODES.MISMATCH, at, `'${this.name(id)}' holds ${before}${since}, not ${this.show(found)}`);
       return;
     }
-    if (!this.origins.has(id) && this.u.resolve(expected).kind !== "var") this.origins.set(id, at);
+    if (!this.origins.has(id) && (this.u.resolve(expected).kind !== "var" || this.u.kindOf(expected))) this.origins.set(id, at);
   }
 
   private expect(expected: Type, found: Type, at: Provenance, what: string): void {
@@ -192,7 +217,7 @@ export class TypeChecker {
   private infer(e: Expr): Type {
     switch (e.node) {
       case "Literal":
-        return this.literalType(e.value, e.at);
+        return this.literalType(e.value, e.at, e.declared);
       case "LoadNoun":
         return this.nounType(e.noun);
       case "TemporalAnchorRead":
@@ -208,9 +233,28 @@ export class TypeChecker {
       }
       case "Add":
       case "Sub":
-        this.expect(INT, this.expr(e.left), e.at, "a value in arithmetic");
-        this.expect(INT, this.expr(e.right), e.at, "the amount");
-        return INT;
+      case "Mul":
+      case "Div": {
+        // Both sides one numeric type: no widening, no mixing of integers and floats.
+        const left = this.expr(e.left);
+        const right = this.expr(e.right);
+        if (this.u.unify(left, right)) {
+          this.report(TYPE_CODES.MISMATCH, e.at, `arithmetic needs two values of one type, not ${this.show(left)} and ${this.show(right)}; convert one explicitly ('변환 …')`);
+        } else if (!this.u.constrain(left, "number")) {
+          this.report(TYPE_CODES.MISMATCH, e.at, `arithmetic needs numbers, not ${this.show(left)}`);
+        }
+        return left;
+      }
+      case "Compare": {
+        const left = this.expr(e.left);
+        const right = this.expr(e.right);
+        if (this.u.unify(left, right)) {
+          this.report(TYPE_CODES.MISMATCH, e.at, `cannot order ${this.show(left)} against ${this.show(right)}; convert one explicitly ('변환 …')`);
+        } else if (formatType(this.u.resolve(left)) !== "Rune" && !this.u.constrain(left, "number")) {
+          this.report(TYPE_CODES.MISMATCH, e.at, `only numbers and runes are ordered, not ${this.show(left)}`);
+        }
+        return BOOL;
+      }
       case "Eq": {
         const left = this.expr(e.left);
         const right = this.expr(e.right);
@@ -241,37 +285,39 @@ export class TypeChecker {
         return arrayOf(element, e.elements.length);
       }
       case "Index": {
-        const base = this.sequence(e.base, e.at, "an element");
-        this.expect(INT, this.expr(e.index), e.at, "an index");
+        const base = this.sequence(e.base, e.at, "an element", true);
+        this.expect(I64, this.expr(e.index), e.at, "an index");
         return base?.element ?? this.u.fresh();
       }
       case "SetIndex": {
-        const base = this.sequence(e.base, e.at, "an element");
-        this.expect(INT, this.expr(e.index), e.at, "an index");
+        const base = this.sequence(e.base, e.at, "an element", true);
+        this.expect(I64, this.expr(e.index), e.at, "an index");
         const value = this.expr(e.value);
         if (base?.kind === "slice") {
-          this.report(TYPE_CODES.MISMATCH, e.at, `a slice (${formatType(base)}) is a view of an array; write the element through the array`);
+          this.report(TYPE_CODES.MISMATCH, e.at, `a slice (${this.show(e.base.type)}) is a view of an array; write the element through the array`);
         }
         if (base) this.expect(base.element, value, e.at, "the new element");
-        return base ?? this.u.fresh();
+        return this.u.resolve(e.base.type);
       }
       case "Slice": {
         const base = this.sequence(e.base, e.at, "a slice");
-        this.expect(INT, this.expr(e.from), e.at, "where a slice starts");
-        this.expect(INT, this.expr(e.to), e.at, "where a slice ends");
+        this.expect(I64, this.expr(e.from), e.at, "where a slice starts");
+        this.expect(I64, this.expr(e.to), e.at, "where a slice ends");
         return sliceOf(base?.element ?? this.u.fresh());
       }
       case "Length":
         this.sequence(e.base, e.at, "a length");
-        return INT;
+        return I64;
     }
   }
 
   // An array or slice operand, whose type must be known here (local inference).
-  private sequence(e: Expr, at: Provenance, what: string): Extract<Type, { kind: "array" | "slice" }> | null {
+  // An array or slice operand (or, for an element, a List), whose type must be known here.
+  private sequence(e: Expr, at: Provenance, what: string, lists = false): { kind: "array" | "slice" | "list"; element: Type } | null {
     const type = this.u.resolve(this.expr(e));
     if (type.kind === "array" || type.kind === "slice") return type;
-    this.report(TYPE_CODES.MISMATCH, at, `${what} needs an array or a slice whose type is known here, not ${formatType(type)}`);
+    if (lists && type.kind === "named" && type.name === "List") return { kind: "list", element: type.args[0] as Type };
+    this.report(TYPE_CODES.MISMATCH, at, `${what} needs an array${lists ? ", a slice or a List" : " or a slice"} whose type is known here, not ${formatType(type)}`);
     return null;
   }
 
@@ -315,19 +361,25 @@ export class TypeChecker {
     values.forEach((v, i) => this.expect(expected[i] as Type, v, s.at, `returned value ${i + 1}`));
   }
 
-  private literalType(value: ConcreteValue, at: Provenance): Type {
+  private literalType(value: ConcreteValue, at: Provenance, declared?: NumericName): Type {
     switch (value.kind) {
-      case "int":
-        return INT;
+      case "int": {
+        // An integer literal takes its type from context (i64 by default) and must fit it.
+        const type = declared ? prim(declared) : this.u.fresh("integer");
+        this.literals.push({ value: value.value, type, at });
+        return type;
+      }
+      case "float":
+        return declared ? prim(declared) : this.u.fresh("float");
+      case "rune":
+        return RUNE;
       case "text":
         return TEXT;
       case "bool":
         return BOOL;
       case "unit":
         return UNIT_TYPE;
-      case "data":
-      case "array":
-      case "slice":
+      default:
         this.report(TYPE_CODES.UNKNOWN, at, "data values are built with Construct or ArrayLiteral, not written as literals");
         return this.u.fresh();
     }
@@ -337,13 +389,28 @@ export class TypeChecker {
     const target = callable(e.callee);
     const label = `'${target.namespace} ${target.name}'`;
     const params = this.u.instantiate(target.signature.typeParams);
-    const expected = target.signature.params.map((p) => substituteParams(p, params));
+    for (const [name, bound] of Object.entries(target.signature.bounds ?? {})) {
+      const t = params.get(name) as Type;
+      if (bound === "key") this.keys.push({ type: t, at: e.at, what: label });
+      else if (!this.u.constrain(t, bound)) this.report(TYPE_CODES.MISMATCH, e.at, `${label} needs ${bound === "integer" ? "an integer" : `a ${bound}`}, not ${this.show(t)}`);
+    }
+    const fixed = target.signature.params.map((p) => substituteParams(p, params));
     const args = e.args.map((arg) => this.expr(arg));
-    if (args.length !== expected.length) {
-      const n = expected.length;
-      this.report(TYPE_CODES.ARITY, e.at, `${label} takes ${n} argument${n === 1 ? "" : "s"}, not ${args.length}`);
+    const { rest } = target.signature;
+    // After the fixed parameters: any number of T ("same"), or of any types ("any").
+    const expected = rest === undefined ? fixed : [...fixed, ...args.slice(fixed.length).map(() => (rest === "same" ? (params.get("T") as Type) : this.u.fresh()))];
+    if (args.length !== expected.length || args.length < fixed.length) {
+      const n = fixed.length;
+      this.report(TYPE_CODES.ARITY, e.at, `${label} takes ${rest ? "at least " : ""}${n} argument${n === 1 ? "" : "s"}, not ${args.length}`);
     } else {
       args.forEach((arg, i) => this.expect(expected[i] as Type, arg, e.at, `argument ${i + 1} of ${label}`));
+    }
+    // A literal template is checked here; any other is checked when it runs.
+    const template = e.args[0];
+    if (e.callee === "std.io.format" && template?.node === "Literal" && template.value.kind === "text") {
+      const parts = templateParts(template.value.value);
+      if (!parts) this.report(TYPE_CODES.ARITY, e.at, "a template's lone '{' or '}' must be doubled ('{{', '}}')");
+      else if (parts.length - 1 !== args.length - 1) this.report(TYPE_CODES.ARITY, e.at, `the template has ${parts.length - 1} '{}' for ${args.length - 1} value${args.length === 2 ? "" : "s"}`);
     }
     return substituteParams(target.signature.result, params);
   }
@@ -365,9 +432,12 @@ export class TypeChecker {
         return result;
       }
       fields = variant.fields;
-    } else {
+    } else if (def.kind === "product") {
       if (e.variant !== null) this.report(TYPE_CODES.UNKNOWN, e.at, `'${def.name}' is a record, not a sum; it has no variants`);
       fields = def.fields.map((f) => f.type);
+    } else {
+      this.report(TYPE_CODES.UNKNOWN, e.at, `'${def.name}' values are made by the standard library, not constructed`);
+      return result;
     }
     const label = e.variant ?? def.name;
     if (args.length !== fields.length) {
@@ -472,7 +542,7 @@ export class TypeChecker {
       return t.name === "Unit" ? [{ key: "()", label: "()", fields: [] }] : null;
     }
     const def = t.kind === "named" ? this.table.get(t.name) : null;
-    if (!def || t.kind !== "named") return null;
+    if (!def || t.kind !== "named" || def.kind === "opaque") return null;
     const args = new Map(def.params.map((p, i) => [p, t.args[i] ?? OPEN]));
     if (def.kind === "product") return [{ key: def.name, label: def.name, fields: def.fields.map((f) => substituteParams(f.type, args)) }];
     return def.variants.map((v) => ({ key: v.name, label: v.name, fields: v.fields.map((f) => substituteParams(f, args)) }));
@@ -541,18 +611,63 @@ export class TypeChecker {
 
   // Writes solved types onto the IR and checks what needed every constraint first.
   finish(): void {
+    // A temporal noun that is some integer is a bigint: the solver's integers are unbounded.
+    for (const use of this.temporal) {
+      const type = this.nounType(use.noun);
+      const kind = this.u.kindOf(type);
+      if (kind === "integer" || kind === "number") this.u.unify(type, BIGINT);
+    }
+    // Every other open numeric variable takes its default: integers i64, floats f64.
+    for (const { id, kind } of this.u.kindedVariables()) {
+      this.u.unify({ kind: "var", id }, kind === "float" ? F64 : I64);
+    }
     for (const e of this.exprs) e.type = this.u.resolve(e.type);
     for (const [id, noun] of this.nouns) noun.type = this.u.resolve(this.nounType(id));
+    for (const literal of this.literals) {
+      const type = this.u.resolve(literal.type);
+      if (type.kind !== "prim" || !isInteger(type.name)) continue; // a mismatch already reported
+      const range = integerRange(type.name);
+      if (range && (literal.value < range.min || literal.value > range.max)) {
+        this.report(TYPE_CODES.LITERAL_RANGE, literal.at, `${literal.value} does not fit in ${type.name} (${range.min} … ${range.max})`);
+      }
+    }
+    for (const key of this.keys) {
+      const type = this.u.resolve(key.type);
+      if (!this.isKey(type)) {
+        this.report(TYPE_CODES.NOT_A_KEY, key.at, `${key.what} needs a key type (an integer, Bool, Text, Rune, or data made of them), not ${formatType(type)}`);
+      }
+    }
     for (const use of this.temporal) {
       const type = this.u.resolve(this.nounType(use.noun));
-      const ok = type.kind === "var" || (type.kind === "prim" && (type.name === "Int" || type.name === "Text"));
+      const ok = type.kind === "var" || (type.kind === "prim" && (type.name === "bigint" || type.name === "Text"));
       if (!ok) {
         this.report(
           TYPE_CODES.NOT_TEMPORAL,
           use.at,
-          `'${this.name(use.noun)}' is ${formatType(type)}; a temporal value (${use.what}) must be Int or Text, the sorts the temporal solver knows`,
+          `'${this.name(use.noun)}' is ${formatType(type)}; a temporal value (${use.what}) must be bigint or Text, the sorts the temporal solver knows`,
         );
       }
+    }
+  }
+
+  // Key types (map keys, set elements): equality is reflexive and structural. Floats
+  // (NaN), arrays, slices, collections and files are not keys.
+  private isKey(type: Type, seen: ReadonlySet<string> = new Set()): boolean {
+    switch (type.kind) {
+      case "prim":
+        return type.name !== "f32" && type.name !== "f64";
+      case "var":
+        return true; // nothing was ever put in it
+      case "named": {
+        const def = this.table.get(type.name);
+        if (!def || def.kind === "opaque") return false;
+        if (seen.has(type.name)) return true; // recursive types: the other fields decide
+        const args = new Map(def.params.map((p, i) => [p, type.args[i] as Type]));
+        const fields = def.kind === "product" ? def.fields.map((f) => f.type) : def.variants.flatMap((v) => v.fields);
+        return fields.every((f) => this.isKey(this.u.resolve(substituteParams(f, args)), new Set([...seen, type.name])));
+      }
+      default:
+        return false;
     }
   }
 }

@@ -1,60 +1,56 @@
-import { int, type ConcreteValue } from "../semantics/values";
-import { INT, param, UNIT_TYPE, type Type } from "../types/types";
+import type { ConcreteValue } from "../semantics/values";
+import type { Kind, Type } from "../types/types";
+import type { Host } from "../stdlib/host";
+import { STANDARD_LIBRARY } from "../stdlib/index";
 import type { CallableId } from "./hir";
 
-// Callables reachable through the colon-call syntax `[이름공간 이름: 인자, …]`. M5 has a
-// tiny built-in set, enough to take a call through parsing, name resolution, signature
-// resolution, type checking and execution.
+// Built-in callables, reached through the colon-call syntax `[이름공간 이름: 인자, …]`.
+// They go through the same stages as a user's callable plane: name resolution,
+// signature instantiation, type checking, execution. Each has a stable internal id
+// (std.io.println) and a Korean source spelling (표준 줄출력).
 //
-// A pure callable is a function of concrete values. An effect callable (output) is
-// carried out by the runtime, which owns every effect.
+// Three kinds:
+// - pure: a function of concrete values (and their types, which checked arithmetic needs);
+// - output: stdout (print, println), the one effect whose argument may still be
+//   symbolic; the runtime holds the write until the value is known;
+// - effect: everything else outside the program (stdin, files, clocks). It needs
+//   concrete arguments, runs through the Host, and commits when it runs.
 
-export type Signature = { readonly typeParams: readonly string[]; readonly params: readonly Type[]; readonly result: Type };
+// A built-in's type parameters may be bounded: to a kind of number, or to key types.
+// `rest`: further arguments after `params`, all of type T ("same") or of any types ("any").
+export type Signature = {
+  readonly typeParams: readonly string[];
+  readonly bounds?: Readonly<Record<string, Kind | "key">>;
+  readonly params: readonly Type[];
+  readonly rest?: "same" | "any";
+  readonly result: Type;
+};
+
+// The resolved types of one call: what checked arithmetic and conversions need.
+export type CallTypes = { readonly args: readonly Type[]; readonly result: Type };
+
+// A grounded, nondeterministic input the program consumed, kept for replay.
+export type HostEvent = { readonly step: number; readonly source: string; readonly value: string };
+
+export type EffectContext = {
+  readonly host: Host;
+  readonly record: (source: string, value: string) => void;
+  readonly files: Map<number, { readonly path: string; open: boolean }>;
+};
+
+export type CallableBody =
+  | { readonly kind: "pure"; readonly apply: (args: readonly ConcreteValue[], types: CallTypes) => ConcreteValue }
+  | { readonly kind: "output"; readonly newline: boolean }
+  | { readonly kind: "effect"; readonly perform: (args: readonly ConcreteValue[], ctx: EffectContext, types: CallTypes) => ConcreteValue };
 
 export type Callable = {
   readonly id: CallableId;
   readonly namespace: string; // as written in source
   readonly name: string;
   readonly signature: Signature;
-} & ({ readonly kind: "pure"; readonly apply: (args: readonly ConcreteValue[]) => ConcreteValue } | { readonly kind: "effect" });
+} & CallableBody;
 
-const asInt = (value: ConcreteValue | undefined): bigint => {
-  if (value?.kind !== "int") throw new Error("an Int argument was expected; the type checker should have caught this");
-  return value.value;
-};
-
-export const CALLABLES: readonly Callable[] = [
-  {
-    id: "std.io.println",
-    namespace: "표준",
-    name: "줄출력",
-    signature: { typeParams: ["T"], params: [param("T")], result: UNIT_TYPE },
-    kind: "effect",
-  },
-  {
-    id: "std.math.abs",
-    namespace: "수학",
-    name: "절댓값",
-    signature: { typeParams: [], params: [INT], result: INT },
-    kind: "pure",
-    apply: ([x]) => {
-      const n = asInt(x);
-      return int(n < 0n ? -n : n);
-    },
-  },
-  {
-    id: "std.math.max",
-    namespace: "수학",
-    name: "최댓값",
-    signature: { typeParams: [], params: [INT, INT], result: INT },
-    kind: "pure",
-    apply: ([a, b]) => {
-      const x = asInt(a);
-      const y = asInt(b);
-      return int(x >= y ? x : y);
-    },
-  },
-];
+export const CALLABLES: readonly Callable[] = STANDARD_LIBRARY;
 
 export const PRINTLN: CallableId = "std.io.println";
 
@@ -75,4 +71,3 @@ export function resolveCallable(namespace: string, name: string): CallableResolu
   const found = inNamespace.find((c) => c.name === name);
   return found ? { kind: "found", callable: found } : { kind: "no-name", known: inNamespace.map((c) => c.name) };
 }
-

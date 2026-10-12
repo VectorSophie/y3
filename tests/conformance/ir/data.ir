@@ -1,25 +1,25 @@
-(0,0,0) 3:1  StoreNoun 위치#1 ← 점(1 : Int, 2 : Int) : 점
-(0,1,0) 4:1  StoreNoun 위치#1 ← SetField(위치#1 : 점, 가로, Add(Field(위치#1 : 점, 가로) : Int, 10 : Int) : Int) : 점
+(0,0,0) 3:1  StoreNoun 위치#1 ← 점(1 : i64, 2 : i64) : 점
+(0,1,0) 4:1  StoreNoun 위치#1 ← SetField(위치#1 : 점, 가로, Add(Field(위치#1 : 점, 가로) : i64, 10 : i64) : i64) : 점
 (0,2,0) 5:1  Eval Call std.io.println(위치#1 : 점) : Unit
-(0,3,0) 6:1  StoreNoun 도형#2 ← 사각(3 : Int, 4 : Int) : 모양
-(0,4,0) 7:1  StoreNoun 넓이#3 ← Match 도형#2 : 모양 { 원(r) => r : Int; 사각(w, _) => w : Int; 빈모양 => 0 : Int } : Int
-(0,5,0) 8:1  Eval Call std.io.println(넓이#3 : Int) : Unit
-(0,6,0) 9:1  CallPlane main.나눔(6 : Int, 0 : Int) → 결과#4
-(0,7,0) 10:1  StoreNoun 글#5 ← Match 결과#4 : Result<Int, Text> { Ok(n) => "됨" : Text; Err(e) => e : Text } : Text
+(0,3,0) 6:1  StoreNoun 도형#2 ← 사각(3 : i64, 4 : i64) : 모양
+(0,4,0) 7:1  StoreNoun 넓이#3 ← Match 도형#2 : 모양 { 원(r) => r : i64; 사각(w, _) => w : i64; 빈모양 => 0 : i64 } : i64
+(0,5,0) 8:1  Eval Call std.io.println(넓이#3 : i64) : Unit
+(0,6,0) 9:1  CallPlane main.나눔(6 : i64, 0 : i64) → 결과#4
+(0,7,0) 10:1  StoreNoun 글#5 ← Match 결과#4 : Result<i64, Text> { Ok(n) => "됨" : Text; Err(e) => e : Text } : Text
 (0,8,0) 11:1  Eval Call std.io.println(글#5 : Text) : Unit
 (0,9,0) 12:1  End
 nouns:
   위치#1 : 점
   도형#2 : 모양
-  넓이#3 : Int
-  결과#4 : Result<Int, Text>
+  넓이#3 : i64
+  결과#4 : Result<i64, Text>
   글#5 : Text
 
-main.나눔(수#6: Int, 나눌수#7: Int) → Result<Int, Text>
-(0,0,0) :나눔: 21:1  StoreNoun r#8 ← Ok(수#6 : Int) : Result<Int, Text>
-(0,1,0) :나눔: 22:1  Branch Eq(나눌수#7 : Int, 0 : Int) : Bool → StoreNoun r#8 ← Err("0으로 나눌 수 없다" : Text) : Result<Int, Text>
-(0,2,0) :나눔: 23:1  Return r#8 : Result<Int, Text>
+main.나눔(수#6: i64, 나눌수#7: i64) → Result<i64, Text>
+(0,0,0) :나눔: 21:1  StoreNoun r#8 ← Ok(수#6 : i64) : Result<i64, Text>
+(0,1,0) :나눔: 22:1  Branch Eq(나눌수#7 : i64, 0 : i64) : Bool → StoreNoun r#8 ← Err("0으로 나눌 수 없다" : Text) : Result<i64, Text>
+(0,2,0) :나눔: 23:1  Return r#8 : Result<i64, Text>
 nouns:
-  수#6 : Int
-  나눌수#7 : Int
-  r#8 : Result<Int, Text>
+  수#6 : i64
+  나눌수#7 : i64
+  r#8 : Result<i64, Text>

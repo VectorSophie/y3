@@ -2,7 +2,7 @@ import type { Span } from "../language/ast";
 import type { Compass, Relative, Turn } from "../space/orientation";
 import type { Coordinate } from "../space/manifest";
 import type { ConcreteValue } from "../semantics/values";
-import type { Type } from "../types/types";
+import type { NumericName, Type } from "../types/types";
 
 // Y3's typed semantic IR (its HIR). Surface syntax ends at the sentence parser; this is
 // what every later layer targets. Nouns are resolved to ids, every expression carries
@@ -37,11 +37,17 @@ type Typed = { type: Type; readonly at: Provenance };
 
 export type Expr = Typed &
   (
-    | { readonly node: "Literal"; readonly value: ConcreteValue }
+    // `declared`: the type a suffix gave a numeric literal (255u8); otherwise the
+    // literal takes its type from context (an integer defaults to i64, a float to f64).
+    | { readonly node: "Literal"; readonly value: ConcreteValue; readonly declared?: NumericName }
     | { readonly node: "LoadNoun"; readonly noun: NounId }
     | { readonly node: "LoadLocal"; readonly local: string } // a name bound by a pattern
     | { readonly node: "Add"; readonly left: Expr; readonly right: Expr }
     | { readonly node: "Sub"; readonly left: Expr; readonly right: Expr }
+    | { readonly node: "Mul"; readonly left: Expr; readonly right: Expr }
+    | { readonly node: "Div"; readonly left: Expr; readonly right: Expr }
+    // Ordering of two numbers of one type, or two runes.
+    | { readonly node: "Compare"; readonly op: "lt" | "le" | "gt" | "ge"; readonly left: Expr; readonly right: Expr }
     | { readonly node: "Eq"; readonly left: Expr; readonly right: Expr } // Eq<T>(T, T) -> Bool
     | { readonly node: "Not"; readonly operand: Expr }
     | { readonly node: "Call"; readonly callee: CallableId; readonly args: readonly Expr[] }
@@ -120,6 +126,9 @@ export function childExprs(item: Stmt | Expr): Expr[] {
       return [item.condition];
     case "Add":
     case "Sub":
+    case "Mul":
+    case "Div":
+    case "Compare":
     case "Eq":
       return [item.left, item.right];
     case "Not":

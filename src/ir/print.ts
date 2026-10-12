@@ -106,7 +106,7 @@ export function formatCompiledIr(program: CompiledProgram): string {
   const parts = [formatProgramIr(program.cells.values(), program.nouns)];
   for (const p of program.procedures.values()) {
     const params = p.params.map((x) => `${x.name}#${x.noun}: ${formatType(x.type)}`).join(", ");
-    const results = p.results.length === 0 ? "" : ` → ${p.results.length === 1 ? formatType(p.results[0] as never) : `(${p.results.map(formatType).join(", ")})`}`;
+    const results = p.results.length === 0 ? "" : ` → ${p.results.length === 1 ? formatType(p.results[0] as never) : `(${p.results.map((r) => formatType(r)).join(", ")})`}`;
     parts.push(`${p.id}(${params})${results}\n${formatProgramIr(p.cells.values(), p.nouns)}`);
   }
   return parts.join("\n");

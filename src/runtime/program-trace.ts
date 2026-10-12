@@ -27,8 +27,14 @@ export function describeEffect(effect: Effect): string {
       return `${effect.name} := ${showValue(effect.value)}`;
     case "say":
       return `out ${JSON.stringify(effect.line)}`;
+    case "write":
+      return `out ${JSON.stringify(effect.text)}  [no line break]`;
+    case "input":
+      return `input ${effect.source} = ${effect.value}`;
     case "test":
       return `test ${showValue(effect.left)} ${effect.negated ? "≠" : "="} ${showValue(effect.right)}: ${effect.holds ? "yes" : "no"}`;
+    case "order":
+      return `test ${showValue(effect.left)} ${{ lt: "<", le: "≤", gt: ">", ge: "≥" }[effect.op]} ${showValue(effect.right)}: ${effect.holds ? "yes" : "no"}`;
     case "condition":
       return `condition: ${effect.holds ? "yes" : "no"}`;
     case "anchor":
