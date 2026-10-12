@@ -708,3 +708,66 @@ function formatDocumentOf(source: string): string {
   if (!loaded.ast) throw new Error("expected a document");
   return formatDocument(loaded.ast);
 }
+
+describe("ambiguous call heads", () => {
+  // [길이 계산: 3] reads as module 길이's 계산, or as noun 길 (+이) receiving local 계산.
+  const LIB = `+++\nname = "에이"\n+++\n\n※\n\n:계산: (x: Int) → Int ⟦\n[x에 100을 더한다.]\n[x를 돌려준다.]\n⟧\n`;
+  const OTHER = `+++\nname = "씨"\n+++\n\n※\n\n:다른것: () → Int ⟦\n[1을 돌려준다.]\n⟧\n`;
+  const files: Files = { "a.y3": LIB, "c.y3": OTHER };
+  const LOCAL = ":계산: (x: Int) → Int ⟦\n[x를 돌려준다.]\n⟧\n";
+  const withImports = (imports: [string, string][], body: string) =>
+    imports.length === 0 ? body : `+++\n[imports]\n${imports.map(([a, p]) => `"${a}" = "${p}"`).join("\n")}\n+++\n\n${body}`;
+  const plainBody = program(["길이 계산: 3", "길을 말한다.", "끝이다."], LOCAL);
+  const moduleBody = program(["r은 길이 계산: 3", "r을 말한다.", "끝이다."]);
+  const diagnostics = (src: string) => {
+    const loaded = loadDocument(src);
+    if (!loaded.ast || !loaded.space) throw new Error("expected a document");
+    const resolve = (p: string) => (files[p] === undefined ? null : { path: p, source: files[p] as string });
+    return compileProgram(loaded.ast, loaded.space, { resolve }).diagnostics.map((d) => `${d.severity} ${d.code} ${d.message}`);
+  };
+  const AMBIGUOUS =
+    "warning Y3C011 [길이 계산: 3] ambiguous call head '길이 계산': it can mean module '길이', callable '계산', or noun '길' receiving callable '계산'; read as the module call";
+
+  it("only the plain reading resolves: noun 길 receives local 계산, no warning", () => {
+    expect(diagnostics(plainBody)).toEqual([]);
+    expect(run(plainBody).output).toEqual(["3"]);
+  });
+
+  it("only the module reading resolves: the module call, no warning and no particle lint", () => {
+    const src = withImports([["길이", "a.y3"]], moduleBody);
+    expect(diagnostics(src)).toEqual([]);
+    expect(run(src, files).output).toEqual(["103"]);
+    // '나이' would be non-canonical as 나 + 이; as a namespace it is just a name.
+    expect(diagnostics(withImports([["나이", "a.y3"]], program(["나이 계산: 3", "끝이다."])))).toEqual([]);
+    // Without the module, the same words are 나 + 이, and the lint applies.
+    expect(diagnostics(program(["나이 계산: 3", "나를 말한다.", "끝이다."], LOCAL))).toEqual([
+      "warning Y3K001 [나이 계산: 3] non-canonical Korean: write '나가' instead of '나이'",
+    ]);
+  });
+
+  it("both resolve: a warning names both readings, and the module call is taken", () => {
+    const src = withImports([["길이", "a.y3"]], plainBody);
+    const found = diagnostics(src);
+    expect(found[0]).toBe(AMBIGUOUS);
+    // The module call has no receiving noun, so 길 is never introduced: the reading taken is visible.
+    expect(found.slice(1).map((d) => d.split(" ")[1])).toEqual(["Y3G007"]);
+  });
+
+  it("an unrelated import changes nothing: a namespace without the callable does not capture the sentence", () => {
+    const src = withImports([["길이", "c.y3"], ["다른", "a.y3"]], plainBody);
+    expect(diagnostics(src)).toEqual([]);
+    const before = run(plainBody);
+    const after = run(src, files);
+    expect(after.output).toEqual(before.output);
+    expect(after.trace.map((e) => e.effects.map(describeEffect))).toEqual(before.trace.map((e) => e.effects.map(describeEffect)));
+  });
+
+  it("is deterministic under formatting and under the order of imports", () => {
+    const one = withImports([["길이", "a.y3"], ["다른", "c.y3"]], plainBody);
+    const two = withImports([["다른", "c.y3"], ["길이", "a.y3"]], plainBody);
+    expect(diagnostics(one)[0]).toBe(AMBIGUOUS);
+    expect(diagnostics(two)).toEqual(diagnostics(one));
+    const formatted = formatDocumentOf(one);
+    expect(diagnostics(formatted).map((d) => d.replace(/\(line \d+\)/, ""))).toEqual(diagnostics(one).map((d) => d.replace(/\(line \d+\)/, "")));
+  });
+});

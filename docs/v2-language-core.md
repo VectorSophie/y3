@@ -236,11 +236,24 @@ A `FAULT` is a broken program (an index out of range), not a recoverable error.
     in `의` (`Y3C010`).
 - Errors in an imported module are reported under its path.
 
-**Reading a call head.** `[나이 계산: 3]` can be read two ways: namespace `나이` plus
-callable `계산`, or noun `나(이)` receiving the result of `계산`. Morphology alone cannot
-choose. The parser keeps both readings, and name resolution takes the namespaced one
-exactly when that namespace exists. The choice is deterministic, and aliases need no
-spelling rules.
+**Reading a call head.** `[길이 계산: 3]` can be read two ways: module `길이` plus
+callable `계산`, or noun `길` receiving the result of `계산`. Morphology alone cannot
+choose, so the parser keeps both readings and name resolution decides:
+
+1. A reading **resolves** when its callee names something that exists: a callable
+   plane, a constructor or a built-in, in the named module if it has one.
+2. The namespaced reading is taken if it resolves; otherwise the plain one.
+3. If **both** resolve, the program still compiles, with a warning (`Y3C011`) that
+   names both readings and the one taken. Without the warning, adding an import could
+   silently change what an existing sentence means.
+4. An import that does not have the callable cannot capture a sentence: it does not
+   resolve, so the plain reading stands.
+5. Orthography lint belongs to a reading. `나이` is non-canonical as `나` + `이` (write
+   `나가`), but as a namespace it is just a name, so the lint is reported only when the
+   plain reading is taken.
+
+There is no extra qualification syntax. The choice depends only on which names exist,
+so formatting and the order of imports never change it.
 
 ## Data values are concrete, for now
 
@@ -262,6 +275,7 @@ planned: the solver stays `A x = b` over integers, and text unification.
 | `Y3C008` | a module that cannot be found |
 | `Y3C009` | an import cycle |
 | `Y3C010` | an alias that cannot name a module |
+| `Y3C011` | a call head that two readings resolve (warning) |
 | `Y3G013`, `Y3G014` | a malformed match, a malformed return |
 | `Y3S023`, `Y3S024` | a misplaced signature, a declaration with no name |
 | `Y3V004` | a callable plane placed in the volume |

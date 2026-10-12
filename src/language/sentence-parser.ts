@@ -426,8 +426,8 @@ function parseCall(words: string[], issues: SentenceIssue[]): ActAst {
   if (args.some((arg) => arg.length === 0)) fail(SENTENCE_CODES.BAD_CALL, `an argument is missing: ${usage}`);
 
   // Targets: phrases in 과/와, then one in 은/는/이/가; or none at all.
-  const targetsOf = (words: readonly string[]): string[] | null => {
-    const lint: SentenceIssue[] = [];
+  // Lint belongs to a reading: '나이' is non-canonical as 나 + 이, but fine as a namespace.
+  const targetsOf = (words: readonly string[], lint: SentenceIssue[]): string[] | null => {
     const found: string[] = [];
     for (const [i, word] of words.entries()) {
       const p = PARTICLES.find((x) => word.endsWith(x.form) && word.length > x.form.length);
@@ -437,20 +437,24 @@ function parseCall(words: string[], issues: SentenceIssue[]): ActAst {
       if (!NOUN_PATTERN.test(stem) || RESERVED_WORDS.has(stem)) return null;
       found.push(stem);
     }
-    issues.push(...lint);
     return found;
   };
   const readings: CallReading[] = [];
+  let twice: string | undefined;
   for (const size of [2, 1]) {
     const callee = head.slice(-size);
     if (callee.length !== size || !callee.every((w) => NOUN_PATTERN.test(w))) continue;
-    const targets = targetsOf(head.slice(0, head.length - size));
-    if (targets) {
-      const twice = targets.find((t, i) => targets.indexOf(t) !== i);
-      if (twice) fail(SENTENCE_CODES.BAD_CALL, `'${twice}' would receive two results; each result needs its own noun`);
-      readings.push({ targets, callee });
+    const lint: SentenceIssue[] = [];
+    const targets = targetsOf(head.slice(0, head.length - size), lint);
+    if (!targets) continue;
+    const repeated = targets.find((t, i) => targets.indexOf(t) !== i);
+    if (repeated) {
+      twice ??= repeated;
+      continue;
     }
+    readings.push({ targets, callee, lint });
   }
+  if (readings.length === 0 && twice) fail(SENTENCE_CODES.BAD_CALL, `'${twice}' would receive two results; each result needs its own noun`);
   if (readings.length === 0) fail(SENTENCE_CODES.BAD_CALL, usage);
   const call: CallAst = { kind: "call", readings, args: args.map(expr) };
   return { kind: "call", call };

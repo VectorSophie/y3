@@ -26,7 +26,11 @@ export const ELABORATION_CODES = {
   UNKNOWN_CALLABLE: "Y3Y002",
   UNKNOWN_NAME: "Y3Y006",
   MULTIPLE_RESULTS: "Y3C003",
+  AMBIGUOUS_CALL: "Y3C011",
 } as const;
+
+// A warning found while elaborating: the statement is still well formed.
+export type ElaborationWarning = { readonly code: string; readonly message: string };
 
 // The nouns of one body (the main volume or a callable plane). Ids are unique across
 // the program, so two bodies' 값 are two different nouns.
@@ -76,7 +80,13 @@ export function constructorIn(scope: ModuleScope, name: string): Constructor | n
   return scope.constructors.get(name) ?? BUILTIN_CONSTRUCTORS.get(name) ?? null;
 }
 
-export function elaborate(sentence: SentenceAst, at: Provenance, nouns: NounTable, scope: ModuleScope): Stmt {
+export function elaborate(
+  sentence: SentenceAst,
+  at: Provenance,
+  nouns: NounTable,
+  scope: ModuleScope,
+  warn: (warning: ElaborationWarning) => void = () => {},
+): Stmt {
   const node = <T extends object>(fields: T) => ({ ...fields, at }) as unknown as Stmt;
   const typed = <T extends object>(fields: T): Expr => ({ ...fields, type: PENDING, at }) as unknown as Expr;
   const unknown = (message: string): never => {
@@ -121,12 +131,44 @@ export function elaborate(sentence: SentenceAst, at: Provenance, nouns: NounTabl
     }
   };
 
-  // Which reading of a call head to take: namespaced when that namespace exists.
+  // Whether a callee names something here: a callable plane, a constructor or a
+  // built-in, under its namespace if it has one.
   const known = (namespace: string) =>
     namespace === ARRAY_NAMESPACE || scope.imports.has(namespace) || resolveCallable(namespace, "").kind !== "no-namespace";
+  const resolves = ([first, second]: readonly string[]): boolean => {
+    const name = first ?? "";
+    if (second === undefined) return scope.planes.has(name) || constructorIn(scope, name) !== null || name === ARRAY_NAMESPACE;
+    if (name === ARRAY_NAMESPACE) return second === "길이" || second === "자르기";
+    const imported = scope.imports.get(name);
+    if (imported) return imported.planes.has(second) || imported.constructors.has(second);
+    return resolveCallable(name, second).kind === "found";
+  };
+  // Which reading of a call head to take. The namespaced reading wins when it resolves.
+  // When both resolve, the sentence's meaning hangs on which names exist, so say so:
+  // a later import could otherwise change it silently.
   const reading = (c: CallAst): CallReading => {
+    const chosen = choose(c);
+    for (const issue of chosen.lint) warn({ code: issue.code, message: issue.message });
+    return chosen;
+  };
+  const choose = (c: CallAst): CallReading => {
     const namespaced = c.readings.find((r) => r.callee.length === 2);
     const plain = c.readings.find((r) => r.callee.length === 1);
+    const namespacedOk = namespaced !== undefined && resolves(namespaced.callee);
+    const plainOk = plain !== undefined && resolves(plain.callee);
+    if (namespaced && plain && namespacedOk && plainOk) {
+      const [ns, name] = namespaced.callee;
+      const receiver = plain.targets[plain.targets.length - 1] ?? "";
+      warn({
+        code: ELABORATION_CODES.AMBIGUOUS_CALL,
+        message:
+          `ambiguous call head '${namespaced.callee.join(" ")}': it can mean module '${ns}', callable '${name}', ` +
+          `or noun '${receiver}' receiving callable '${plain.callee[0]}'; read as the module call`,
+      });
+    }
+    if (namespacedOk) return namespaced as CallReading;
+    if (plainOk) return plain as CallReading;
+    // Neither resolves: report against the reading the writer most likely meant.
     return (namespaced && known(namespaced.callee[0] ?? "") ? namespaced : (plain ?? namespaced)) as CallReading;
   };
 

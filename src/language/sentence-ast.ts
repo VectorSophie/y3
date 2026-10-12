@@ -29,6 +29,8 @@ export type PlaceAst = { readonly noun: string; readonly steps: readonly PlaceSt
 export type CallReading = {
   readonly targets: readonly string[]; // nouns that receive the results: 몫과 나머지는 …
   readonly callee: readonly string[]; // [name] or [namespace, name]
+  // Orthography lint for this reading's particles, reported only if it is chosen.
+  readonly lint: readonly { readonly code: string; readonly severity: "error" | "warning"; readonly message: string }[];
 };
 export type CallAst = { readonly kind: "call"; readonly readings: readonly CallReading[]; readonly args: readonly ExprAst[] };
 

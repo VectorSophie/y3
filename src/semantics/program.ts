@@ -299,7 +299,9 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
           const at: Provenance = { span, plane: { slot: layer.z, name: source.name }, cell: { x, y, z: layer.z }, source: cell.sentence };
           let stmt: Stmt;
           try {
-            stmt = elaborate(result.sentence, at, nouns, module.scope);
+            stmt = elaborate(result.sentence, at, nouns, module.scope, (w) =>
+              report({ code: w.code, severity: "warning", message: `${module.key !== "main" && module.path ? `${module.path}: ` : ""}[${cell.sentence}] ${w.message}`, span }),
+            );
           } catch (e) {
             if (!(e instanceof ElaborationError)) throw e;
             fail(e.code, span, `[${cell.sentence}] ${e.message}`);
