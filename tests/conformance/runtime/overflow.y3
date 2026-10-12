@@ -1,0 +1,8 @@
+# Fixed-width integers are checked: 255u8 + 1 is a FAULT, never 0.
+⟦
+[x는 254u8이다.]
+[여기가 처음이다.]
+[x를 말한다.]
+[x에 1을 더한다.]
+[끝은 처음이다.]
+⟧

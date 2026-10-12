@@ -1,0 +1,17 @@
+(0,0,0) 3:1  StoreNoun n#1 ← 7 : i64
+(0,1,0) 4:1  StoreNoun n#1 ← Div(n#1 : i64, 2 : i64) : i64
+(0,2,0) 5:1  Eval Call std.io.println(n#1 : i64) : Unit
+(0,3,0) 6:1  StoreNoun f#2 ← Call std.convert.f64(n#1 : i64) : f64
+(0,4,0) 7:1  StoreNoun f#2 ← Div(f#2 : f64, 2.0 : f64) : f64
+(0,5,0) 8:1  Eval Call std.io.println(f#2 : f64) : Unit
+(0,6,0) 9:1  StoreNoun z#3 ← 0.0 : f64
+(0,7,0) 10:1  StoreNoun q#4 ← z#3 : f64
+(0,8,0) 11:1  StoreNoun q#4 ← Div(q#4 : f64, z#3 : f64) : f64
+(0,9,0) 12:1  Branch Not(Eq(q#4 : f64, q#4 : f64) : Bool) : Bool → Eval Call std.io.println("NaN ≠ NaN" : Text) : Unit
+(0,10,0) 13:1  Branch Ge(n#1 : i64, 2 : i64) : Bool → Eval Call std.io.println("≥ 2" : Text) : Unit
+(0,11,0) 14:1  End
+nouns:
+  n#1 : i64
+  f#2 : f64
+  z#3 : f64
+  q#4 : f64

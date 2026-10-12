@@ -93,6 +93,12 @@ describe("numeric literals", () => {
     expect(errors(["x는 170141183460469231731687303715884105728i128이다.", "끝이다."])[0]).toMatch(/^Y3N001/);
   });
 
+  it("never let an integer literal become a known float type", () => {
+    expect(errors(["x는 2.5f64이다.", "x에 1을 더한다.", "끝이다."])[0]).toMatch(/arithmetic needs two values of one type, not f64 and \{integer\}/);
+    expect(errors(["끝이다."], ":반: (x: f32) → f32 ⟦\n[x를 돌려준다.]\n⟧\n").length).toBe(0);
+    expect(errors(["y는 반: 1", "끝이다."], ":반: (x: f32) → f32 ⟦\n[x를 돌려준다.]\n⟧\n")[0]).toMatch(/argument 1 of ':반:' must be f32, not \{integer\}/);
+  });
+
   it("never turn an integer literal into a float", () => {
     expect(errors(["x는 1.5이다.", "x에 1을 더한다.", "끝이다."])).toEqual([
       "Y3Y001 [x에 1을 더한다.] arithmetic needs two values of one type, not {float} and {integer}; convert one explicitly ('변환 …')",
@@ -407,7 +413,8 @@ describe("collections", () => {
     const r = prng(19);
     const value = (depth: number): ConcreteValue => {
       const k = r.next();
-      if (k < 0.3) return int(BigInt(Math.floor(r.next() * 5) - 2));
+      if (k < 0.2) return int(BigInt(Math.floor(r.next() * 5) - 2));
+      if (k < 0.3) return int((1n << 53n) + BigInt(Math.floor(r.next() * 3))); // past exact doubles
       if (k < 0.5) return text(r.pick(["", "a", "가", "a,b", '"']));
       if (k < 0.6) return { kind: "bool", value: r.next() < 0.5 };
       if (k < 0.7) return { kind: "rune", value: r.pick([97, 44032, 128512]) };

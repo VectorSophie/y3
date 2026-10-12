@@ -34,6 +34,7 @@ export function fixtures(): { path: string; source: string }[] {
     "tests/conformance/typed",
     "tests/conformance/core",
     "tests/conformance/core/lib",
+    "tests/conformance/runtime",
   ];
   return dirs.flatMap((dir) =>
     readdirSync(join(ROOT, dir))

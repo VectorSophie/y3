@@ -1,0 +1,7 @@
+# No implicit conversion: i64 + i32 is refused before the run.
+⟦
+[x는 1i64이다.]
+[y는 2i32이다.]
+[x에 y를 더한다.]
+[끝이다.]
+⟧

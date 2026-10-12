@@ -41,6 +41,12 @@
     {"path": "tests/conformance/core/temporal-call.y3", "milestone": "M6", "status": "HALT", "output": ["4"], "steps": 7, "trace": "tests/conformance/traces/temporal-call.trace", "unknowns": [{"bornAtStep": 1, "value": "3", "mark": "RETRO"}]},
     {"path": "tests/conformance/core/module.y3", "milestone": "M6", "status": "HALT", "output": ["14"], "steps": 8, "trace": "tests/conformance/traces/module.trace", "types": {"p": "기하.점"}},
     {"path": "tests/conformance/core/reject-return-outside.y3", "milestone": "M6", "status": "REJECTED", "codes": ["Y3C001"], "output": [], "steps": 0},
-    {"path": "tests/conformance/core/reject-not-exhaustive.y3", "milestone": "M6", "status": "REJECTED", "codes": ["Y3Y005"], "output": [], "steps": 0}
+    {"path": "tests/conformance/core/reject-not-exhaustive.y3", "milestone": "M6", "status": "REJECTED", "codes": ["Y3Y005"], "output": [], "steps": 0},
+    {"path": "tests/conformance/runtime/overflow.y3", "milestone": "M7", "status": "FAULT", "output": ["254", "255"], "steps": 7, "trace": "tests/conformance/traces/overflow.trace", "types": {"x": "u8"}},
+    {"path": "tests/conformance/runtime/numbers.y3", "milestone": "M7", "status": "HALT", "output": ["3", "1.5", "NaN ≠ NaN", "≥ 2"], "steps": 12, "trace": "tests/conformance/traces/numbers.trace", "ir": "tests/conformance/ir/numbers.ir", "types": {"n": "i64", "f": "f64"}},
+    {"path": "tests/conformance/runtime/text.y3", "milestone": "M7", "status": "HALT", "output": ["4 runes, 10 bytes, 3 graphemes", "😀가"], "steps": 9, "trace": "tests/conformance/traces/text.trace", "types": {"a": "i64", "s": "Text"}},
+    {"path": "tests/conformance/runtime/collections.y3", "milestone": "M7", "status": "HALT", "output": ["[점(1, 2), 점(0, 0)]", "Some(\"나\")", "[3, 1, 2, 9]"], "steps": 15, "trace": "tests/conformance/traces/collections.trace", "types": {"m": "Map<점, Text>", "l": "List<i64>"}},
+    {"path": "tests/conformance/runtime/reject-mixed.y3", "milestone": "M7", "status": "REJECTED", "codes": ["Y3Y001"], "output": [], "steps": 0},
+    {"path": "tests/conformance/runtime/reject-temporal-float.y3", "milestone": "M7", "status": "REJECTED", "codes": ["Y3Y004"], "output": [], "steps": 0}
   ]
 }

@@ -36,8 +36,12 @@ export function formatExpr(e: Expr, nouns: ReadonlyMap<number, string>): string 
         return `TemporalAnchorRead(${e.moment}, ${noun(e.noun)})`;
       case "Add":
       case "Sub":
+      case "Mul":
+      case "Div":
       case "Eq":
         return `${e.node}(${sub(e.left)}, ${sub(e.right)})`;
+      case "Compare":
+        return `${e.op.charAt(0).toUpperCase()}${e.op.slice(1)}(${sub(e.left)}, ${sub(e.right)})`;
       case "Not":
         return `Not(${sub(e.operand)})`;
       case "Call":
@@ -60,6 +64,10 @@ export function formatExpr(e: Expr, nouns: ReadonlyMap<number, string>): string 
         return `Slice(${sub(e.base)}, ${sub(e.from)}, ${sub(e.to)})`;
       case "Length":
         return `Length(${sub(e.base)})`;
+      default: {
+        const unhandled: never = e;
+        throw new Error(`no printer for ${(unhandled as Expr).node}`);
+      }
     }
   })();
   return `${body} : ${formatType(e.type)}`;
