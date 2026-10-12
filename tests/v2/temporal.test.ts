@@ -109,7 +109,7 @@ describe("text unknowns", () => {
     const { compiled } = compile('⟦\n[값은 미정이다.]\n[값에 1을 더한다.]\n[값은 "하나"였다.]\n[끝이다.]\n⟧');
     expect(compiled.program).toBeNull();
     expect(compiled.diagnostics.map((d) => [d.code, d.message])).toEqual([
-      ["Y3Y001", '[값은 "하나"였다.] \'값\' holds Int since [값에 1을 더한다.] (line 3), not Text'],
+      ["Y3Y001", '[값은 "하나"였다.] \'값\' holds {integer} since [값에 1을 더한다.] (line 3), not Text'],
     ]);
   });
 });
@@ -178,6 +178,6 @@ describe("layering", () => {
   it("keeps ConcreteValue concrete: plain data, never a symbol or a term", () => {
     const source = readFileSync(join(__dirname, "..", "..", "src", "semantics", "values.ts"), "utf8");
     const declaration = source.match(/^export type ConcreteValue =[\s\S]*?;$/m)?.[0] ?? "";
-    expect([...declaration.matchAll(/kind: "(\w+)"/g)].map((m) => m[1])).toEqual(["int", "text", "bool", "unit", "data", "array", "slice"]);
+    expect([...declaration.matchAll(/kind: "(\w+)"/g)].map((m) => m[1])).toEqual(["int", "float", "rune", "text", "bool", "unit", "data", "array", "slice", "list", "map", "set", "resource"]);
   });
 });

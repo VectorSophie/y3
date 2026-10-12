@@ -36,6 +36,8 @@ export * from "./types/types";
 export * from "./types/check";
 export * from "./runtime/interpreter";
 export * from "./runtime/evaluate";
+export * from "./semantics/numeric";
+export * from "./stdlib/host";
 export * from "./runtime/program-trace";
 export * from "./runtime/program-outcome";
 export * from "./temporal/terms";

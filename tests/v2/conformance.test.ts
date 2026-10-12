@@ -8,7 +8,7 @@ import { readRepoFile } from "./helpers";
 // must match exactly. Fixtures for later milestones must still load, and must be
 // refused by the compiler only because they use what a later milestone adds.
 
-const IMPLEMENTED = new Set(["M2", "M3", "M4", "M5", "M6"]);
+const IMPLEMENTED = new Set(["M2", "M3", "M4", "M5", "M6", "M7"]);
 
 // Imports resolve relative to the importing file, inside the repository.
 const repoModules: ModuleResolver = (path, from) => {

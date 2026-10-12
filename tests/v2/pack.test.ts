@@ -27,37 +27,37 @@ describe("pack / unpack", () => {
 
 ※
 
-자료 점 = { 가로: Int, 세로: Int }
+자료 점 = { 가로: i64, 세로: i64 }
 
 # squares a number
-:제곱:   (수: Int)   →  Int ⟦
+:제곱:   (수: i64)   →  i64 ⟦
 [수를 돌려준다.]
 ⟧
 
 :바닥: ⟦ [ ] ⟧
 `;
     const ast = parseOk(source);
-    expect(ast.appendix?.declarations.map((d) => [d.name, d.text])).toEqual([["점", "자료 점 = { 가로: Int, 세로: Int }"]]);
+    expect(ast.appendix?.declarations.map((d) => [d.name, d.text])).toEqual([["점", "자료 점 = { 가로: i64, 세로: i64 }"]]);
     expect(ast.appendix?.definitions.map((d) => [d.name, d.signature])).toEqual([
-      ["제곱", "(수: Int) → Int"],
+      ["제곱", "(수: i64) → i64"],
       ["바닥", null],
     ]);
     const formatted = formatDocument(ast);
-    expect(formatted).toContain("※\n\n자료 점 = { 가로: Int, 세로: Int }\n\n:바닥: ⟦");
-    expect(formatted).toContain("\n\n# squares a number\n:제곱: (수: Int) → Int ⟦\n[수를 돌려준다.]\n⟧\n");
+    expect(formatted).toContain("※\n\n자료 점 = { 가로: i64, 세로: i64 }\n\n:바닥: ⟦");
+    expect(formatted).toContain("\n\n# squares a number\n:제곱: (수: i64) → i64 ⟦\n[수를 돌려준다.]\n⟧\n");
     expect(formatDocument(parseOk(formatted))).toBe(formatted);
     const files = unpackDocument(source);
-    expect(files.get("planes/제곱.y2")).toBe("# squares a number\n(수: Int) → Int ⟦\n[수를 돌려준다.]\n⟧\n");
-    expect(files.get(MAIN_PATH)).toContain("자료 점 = { 가로: Int, 세로: Int }");
+    expect(files.get("planes/제곱.y2")).toBe("# squares a number\n(수: i64) → i64 ⟦\n[수를 돌려준다.]\n⟧\n");
+    expect(files.get(MAIN_PATH)).toContain("자료 점 = { 가로: i64, 세로: i64 }");
     expect(packDocument(files)).toBe(formatted);
   });
 
   it("accepts a library module: a ※ section and no volume (M6)", () => {
-    const source = "※\n\n자료 쌍 = { 첫: Int, 둘: Int }\n\n:하나더: (수: Int) → Int ⟦ [수를 돌려준다.] ⟧\n";
+    const source = "※\n\n자료 쌍 = { 첫: i64, 둘: i64 }\n\n:하나더: (수: i64) → i64 ⟦ [수를 돌려준다.] ⟧\n";
     const ast = parseOk(source);
     expect(ast.volume).toEqual([]);
     const formatted = formatDocument(ast);
-    expect(formatted).toBe("※\n\n자료 쌍 = { 첫: Int, 둘: Int }\n\n:하나더: (수: Int) → Int ⟦\n[수를 돌려준다.]\n⟧\n");
+    expect(formatted).toBe("※\n\n자료 쌍 = { 첫: i64, 둘: i64 }\n\n:하나더: (수: i64) → i64 ⟦\n[수를 돌려준다.]\n⟧\n");
     expect(packDocument(unpackDocument(source))).toBe(formatted);
     expect(formatDocument(parseOk("※\n"))).toBe("※\n");
     expect(packDocument(unpackDocument("※\n"))).toBe("※\n");

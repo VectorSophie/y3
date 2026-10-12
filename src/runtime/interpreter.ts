@@ -1,5 +1,6 @@
 import type { Coordinate, Manifest, Pose } from "../space/manifest";
-import { PRINTLN } from "../ir/callables";
+import type { EffectContext, HostEvent } from "../ir/callables";
+import { memoryHost, type Host } from "../stdlib/host";
 import type { CallableId, Expr, Moment, NounId, Stmt } from "../ir/hir";
 import { coordinateKey, type Body, type CompiledProgram } from "../ir/program";
 import { renderValue, sameValue, showValue, UNIT, type ConcreteValue } from "../semantics/values";
@@ -8,6 +9,7 @@ import { carriesCause, literal, symbolsOf, TermError, type SymbolicTerm } from "
 import { concrete, evaluate, RuntimeFault, type EvalEnv, type Value } from "./evaluate";
 import type { DecodeResult, Instruction } from "./instructions";
 import { createMachine, step } from "./machine";
+import { arith, order, type OrderOp } from "../semantics/numeric";
 import { nextPose } from "./movement";
 import type { ProgramOutcome, TemporalStatus } from "./program-outcome";
 import type { TraceEntry } from "./trace";
@@ -69,7 +71,11 @@ type Frame = {
   readonly returnTo: Pose | null; // the call cell's pose in the caller: position and full orientation
   readonly results: readonly NounId[]; // the caller's nouns that receive the returned values
 };
-type Line = { text: string | null; term: SymbolicTerm | null; heldSince: number | null };
+// One write to standard output. Writes commit to the host in program order; a write
+// whose value is still symbolic is held, and holds every write after it, until the
+// value is determined. A held write never becomes a different text: it is written
+// once, when known (or as "?" if the run ends first).
+type Write = { text: string | null; term: SymbolicTerm | null; heldSince: number | null; readonly newline: boolean };
 
 export type Effect =
   // ordinary present execution
@@ -77,10 +83,13 @@ export type Effect =
   | { readonly kind: "say"; readonly line: string }
   | { readonly kind: "test"; readonly left: ConcreteValue; readonly right: ConcreteValue; readonly negated: boolean; readonly holds: boolean }
   | { readonly kind: "condition"; readonly holds: boolean } // a Bool condition that is not a comparison
+  | { readonly kind: "order"; readonly op: OrderOp; readonly left: ConcreteValue; readonly right: ConcreteValue; readonly holds: boolean }
   | { readonly kind: "anchor"; readonly at: Coordinate; readonly iteration: number }
   | { readonly kind: "back"; readonly to: Coordinate }
   | { readonly kind: "leave"; readonly anchor: Coordinate }
   | { readonly kind: "end" }
+  | { readonly kind: "write"; readonly text: string } // output without a line break
+  | { readonly kind: "effect"; readonly source: string; readonly value: string } // an external effect, committed
   // calls
   | { readonly kind: "call"; readonly frame: string; readonly args: readonly string[] }
   | { readonly kind: "return"; readonly frame: string; readonly values: readonly string[] }
@@ -138,7 +147,8 @@ export type VersionSummary = {
 
 export type ProgramResult = {
   readonly outcome: ProgramOutcome;
-  readonly output: readonly string[]; // "?" for a line with no unique value
+  readonly output: readonly string[]; // standard output as lines; "?" for a value with no unique value
+  readonly events: readonly HostEvent[]; // grounded inputs (stdin, clocks, files), in order, for replay
   readonly values: ReadonlyMap<string, ConcreteValue>; // nouns with concrete (or resolved) values
   readonly symbols: readonly SymbolSummary[];
   readonly versions: readonly VersionSummary[];
@@ -158,13 +168,30 @@ function at(c: Coordinate): string {
 // Where a call starts: the callable plane's first cell, facing 남, up 위.
 const CALL_ENTRY: Pose = { position: { x: 0, y: 0, z: 0 }, orientation: { forward: "south", up: "up" } };
 
-export function runProgram(program: CompiledProgram, manifest: Manifest, options: { maxSteps?: number } = {}): ProgramResult {
+export type RunOptions = { readonly maxSteps?: number; readonly host?: Host };
+
+export function runProgram(program: CompiledProgram, manifest: Manifest, options: RunOptions = {}): ProgramResult {
   const store = new TemporalStore();
   const bodies = [program, ...program.procedures.values()];
   const names = new Map(bodies.flatMap((body) => body.nouns.map((noun) => [noun.id, noun.name] as const)));
   const nameOf = (id: NounId) => names.get(id) ?? `#${id}`;
   const history: (Version & { readonly frame: string | null })[] = [];
-  const lines: Line[] = [];
+  const writes: Write[] = [];
+  let committed = 0; // writes [0, committed) have reached the host
+  const host = options.host ?? memoryHost();
+  const events: HostEvent[] = [];
+  const effectContext: EffectContext = { host, files: new Map() };
+  // Commits every write up to the first one whose value is not yet known.
+  const commit = (all = false) => {
+    while (committed < writes.length) {
+      const w = writes[committed] as Write;
+      if (w.text === null && !all) return;
+      const text = (w.text ?? "?") + (w.newline ? "\n" : "");
+      host.write(text);
+      events.push({ step: now, source: "std.io.stdout", value: JSON.stringify(text) });
+      committed += 1;
+    }
+  };
   const newScope = (): Scope => ({ anchor: null, iteration: 1, start: new Map(), written: new Set(), promises: [], endReads: [], fixed: [] });
   const main: Frame = { activation: 0, label: null, body: program, current: new Map(), root: newScope(), cycles: [], slots: new Map(), returnTo: null, results: [] };
   const run = main.root;
@@ -268,13 +295,14 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
   };
 
   const flushHeld = () => {
-    for (const line of lines) {
+    for (const line of writes) {
       if (line.text !== null || !line.term) continue;
       const value = store.resolve(line.term);
       if (!value) continue;
       line.text = renderValue(value);
       effects.push({ kind: "flush", line: line.text, heldSince: line.heldSince ?? now });
     }
+    commit();
   };
 
   const recordResolutions = (resolutions: Resolution[]) => {
@@ -377,32 +405,56 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
   const env: EvalEnv = {
     load: (noun) => bound(noun),
     anchor: (noun: NounId, moment: Moment) => (moment === "start" ? settle(atStart(noun)) : fromEnd(noun)),
-    arithmetic: (left, right, sign) => {
-      if (left.kind === "concrete" && right.kind === "concrete") {
-        if (left.value.kind !== "int" || right.value.kind !== "int") throw new Error("arithmetic on a non-Int; the type checker should have caught this");
-        return concrete({ kind: "int", value: left.value.value + sign * right.value.value });
+    arithmetic: (op, type, left, right) => {
+      if (left.kind === "concrete" && right.kind === "concrete") return concrete(arith(op, type, left.value, right.value));
+      // Only bigint is temporal (the solver's integers are unbounded), and time solves
+      // straight lines: a symbol may be added or subtracted, nothing more.
+      if (type !== "bigint") throw new Error(`a symbolic ${type}; the type checker should have caught this`);
+      if (op !== "add" && op !== "sub") {
+        const [l, r] = needNow([left, right], op === "mul" ? "this multiplication" : "this division");
+        return concrete(arith(op, type, l as ConcreteValue, r as ConcreteValue));
       }
       try {
-        return { kind: "symbolic", term: store.arithmetic(termOf(left), termOf(right), sign) };
+        return { kind: "symbolic", term: store.arithmetic(termOf(left), termOf(right), op === "add" ? 1n : -1n) };
       } catch (error) {
         if (error instanceof TermError) throw new RuntimeFault(error.message);
         throw error;
       }
     },
-    effect: (callee: CallableId, args) => {
-      if (callee !== PRINTLN) throw new Error(`no runtime support for ${callee}`);
-      const value = settle(args[0] as Value);
+    output: (arg, newline) => {
+      const value = settle(arg);
       if (value.kind === "concrete") {
         const text = renderValue(value.value);
-        lines.push({ text, term: null, heldSince: null });
-        effects.push({ kind: "say", line: text });
+        writes.push({ text, term: null, heldSince: null, newline });
+        effects.push(newline ? { kind: "say", line: text } : { kind: "write", text });
       } else {
-        // The line is written now, but only the future can say what it reads.
-        lines.push({ text: null, term: value.term, heldSince: now });
+        // The write happens now, but only the future can say what it reads.
+        writes.push({ text: null, term: value.term, heldSince: now, newline });
         store.noteUse(value.term, now);
         effects.push({ kind: "hold", term: store.format(value.term) });
       }
-      return concrete(UNIT);
+      commit();
+    },
+    effect: (target, args, types) => {
+      // An effect barrier: output held on an open symbol was written before this
+      // effect, so this effect may not reach the outside world first. Stop here,
+      // before anything is committed, rather than reorder what the world observes.
+      if (committed < writes.length) {
+        const open = [...new Set(writes.slice(committed).flatMap((w) => (w.text === null && w.term ? pendingLabels(w.term) : [])))];
+        effects.push({ kind: "unresolved", symbols: open });
+        halt("UNRESOLVED", `'${target.namespace} ${target.name}' cannot run while earlier output is held on ${open.join(", ")}: an effect never overtakes held output`);
+        throw new Stopped();
+      }
+      try {
+        const result = target.perform(args, effectContext, types);
+        events.push({ step: now, source: target.id, value: showValue(result) });
+        effects.push({ kind: "effect", source: target.id, value: showValue(result) });
+        return result;
+      } catch (error) {
+        if (error instanceof RuntimeFault) throw error;
+        // The host itself broke (not an ordinary error the program can handle).
+        throw new RuntimeFault(`'${target.namespace} ${target.name}' failed in the host: ${error instanceof Error ? error.message : String(error)}`);
+      }
     },
     now: (value, purpose) => needNow([value], purpose)[0] as ConcreteValue,
   };
@@ -416,6 +468,12 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
       const [left, right] = needNow([evaluate(comparison.eq.left, env), evaluate(comparison.eq.right, env)], "this condition");
       const holds = sameValue(left as ConcreteValue, right as ConcreteValue) !== comparison.negated;
       effects.push({ kind: "test", left: left as ConcreteValue, right: right as ConcreteValue, negated: comparison.negated, holds });
+      return holds;
+    }
+    if (e.node === "Compare") {
+      const [left, right] = needNow([evaluate(e.left, env), evaluate(e.right, env)], "this condition");
+      const holds = order(e.op, left as ConcreteValue, right as ConcreteValue);
+      effects.push({ kind: "order", op: e.op, left: left as ConcreteValue, right: right as ConcreteValue, holds });
       return holds;
     }
     const [value] = needNow([evaluate(e, env)], "this condition");
@@ -546,7 +604,7 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
         for (const [, open] of slots) {
           for (const slot of open) effects.push({ kind: "unanswered", slot: slot.id, symbol: store.format(slot.symbol) });
         }
-        const undetermined = lines.flatMap((line) => (line.text === null && line.term ? pendingLabels(line.term) : []));
+        const undetermined = writes.flatMap((line) => (line.text === null && line.term ? pendingLabels(line.term) : []));
         if (!stop && undetermined.length > 0) {
           const symbols = [...new Set(undetermined)];
           effects.push({ kind: "ambiguous", symbols });
@@ -639,9 +697,15 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     mark: info.value && info.selfLoop ? "SELF_CAUSED" : info.retroactive ? "RETRO" : null,
   });
 
+  // The run is over: whatever is still held is written as "?".
+  commit(true);
+  const stdout = writes.map((w) => (w.text ?? "?") + (w.newline ? "\n" : "")).join("");
+  const output = stdout === "" ? [] : (stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout).split("\n");
+
   return {
     outcome,
-    output: lines.map((line) => line.text ?? "?"),
+    output,
+    events,
     values,
     symbols: store.all().map(summarize),
     versions: history.map((v) => ({

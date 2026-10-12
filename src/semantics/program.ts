@@ -8,7 +8,7 @@ import { interpretManifest } from "../space/manifest";
 import { planeFromAst } from "../space/plane";
 import { buildSpace, type Space } from "../space/volume";
 import { TypeChecker, type BodyContext } from "../types/check";
-import { arrayOf, BOOL, INT, named, param, sliceOf, TEXT, TypeTable, UNIT_TYPE, type Type, type TypeDef } from "../types/types";
+import { arrayOf, BOOL, FLOAT_TYPES, INTEGER_TYPES, named, param, prim, RUNE, sliceOf, TEXT, TypeTable, UNIT_TYPE, type Type, type TypeDef } from "../types/types";
 import { parseDocument } from "../language/document-parser";
 import {
   ARRAY_NAMESPACE,
@@ -53,7 +53,14 @@ export type CompileOptions = { readonly resolve?: ModuleResolver; readonly path?
 
 const NOWHERE: Span = { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } };
 const NOUN_PATTERN = /^[\p{L}_][\p{L}\p{N}_]*$/u;
-const BUILTIN_TYPES = new Set(["Int", "Text", "Bool", "Unit", "Option", "Result"]);
+const PRIMITIVES: ReadonlyMap<string, Type> = new Map([
+  ["Text", TEXT],
+  ["Bool", BOOL],
+  ["Unit", UNIT_TYPE],
+  ["Rune", RUNE],
+  ...[...INTEGER_TYPES, ...FLOAT_TYPES].map((name) => [name, prim(name)] as const),
+]);
+const BUILTIN_TYPES = new Set([...PRIMITIVES.keys(), ...new TypeTable().names()]);
 const STD_NAMESPACES = new Set(["표준", "수학", ARRAY_NAMESPACE]);
 
 // Where each cell of a plane was written.
@@ -164,10 +171,10 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
         if (args.length > 0) fail(`type parameter '${name}' takes no arguments`);
         return param(name);
       }
-      const prim = ({ Int: INT, Text: TEXT, Bool: BOOL, Unit: UNIT_TYPE } as Record<string, Type>)[name];
-      if (prim) {
+      const primitive = PRIMITIVES.get(name);
+      if (primitive) {
         if (args.length > 0) fail(`'${name}' takes no type arguments`);
-        return prim;
+        return primitive;
       }
       internal = BUILTIN_TYPES.has(name) ? name : (module.types.get(name) ?? fail(`unknown type '${name}'`));
     }
@@ -214,7 +221,7 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
           const dup = names.find((n, i) => names.indexOf(n) !== i);
           if (dup) throw new DeclarationError(`field '${dup}' appears twice`);
           def = { kind: "product", name: internal, params: decl.params, fields };
-          claim(decl.name, { typeName: internal, variant: null, arity: fields.length });
+          claim(decl.name, { typeName: internal, variant: null, arity: fields.length, fields: names });
         } else {
           const variants = decl.body.variants.map((v) => ({ name: v.name, fields: v.fields.map((f) => resolveType(module, f, params)) }));
           def = { kind: "sum", name: internal, params: decl.params, variants };

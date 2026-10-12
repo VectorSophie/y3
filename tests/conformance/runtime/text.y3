@@ -1,0 +1,12 @@
+# Text is Unicode scalars: 길이 counts runes, 바이트길이 UTF-8 bytes, 글자수 graphemes.
+⟦
+[s는 "é😀가"이다.]
+[a는 글 길이: s]
+[b는 글 바이트길이: s]
+[c는 글 글자수: s]
+[t는 표준 형식: "{} runes, {} bytes, {} graphemes", a, b, c]
+[t를 말한다.]
+[r은 글 자르기: s, 2, 4]
+[r을 말한다.]
+[끝이다.]
+⟧

@@ -1,4 +1,4 @@
-# Temporal values are Int or Text, the two sorts the temporal solver knows.
+# Temporal values are i64 or Text, the two sorts the temporal solver knows.
 ⟦
 [값은 미정이다.]
 [값은 참이었다.]

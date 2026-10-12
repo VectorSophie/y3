@@ -1,8 +1,8 @@
 import type { CallAst, CallReading, ExprAst, MatchAst, PatternAst, PlaceAst, SentenceAst } from "../language/sentence-ast";
 import { PRINTLN, resolveCallable } from "../ir/callables";
 import { childExprs, type Expr, type Noun, type NounId, type Pattern, type PlaneId, type Provenance, type Stmt } from "../ir/hir";
-import { bool, int, text } from "./values";
-import type { Type } from "../types/types";
+import { bool, float, int, rune, text } from "./values";
+import { BUILTIN_TYPE_DEFS, type Type } from "../types/types";
 
 // Sentence AST → HIR. Resolves nouns to ids and names to what they name (a callable
 // plane, a built-in callable, a constructor, a local bound by a pattern), and spells
@@ -54,7 +54,8 @@ export class NounTable {
 }
 
 // A constructor: a variant of a sum type, or a record type (variant null).
-export type Constructor = { readonly typeName: string; readonly variant: string | null; readonly arity: number };
+// A record constructor also knows its field names, for construction by name.
+export type Constructor = { readonly typeName: string; readonly variant: string | null; readonly arity: number; readonly fields?: readonly string[] };
 
 // What a module's code can name. Built-in names (Option, Some, 표준, 수학, 배열) are
 // visible everywhere; a module's own planes, types and constructors are visible
@@ -66,12 +67,16 @@ export type ModuleScope = {
   readonly imports: ReadonlyMap<string, ModuleScope>;
 };
 
-export const BUILTIN_CONSTRUCTORS: ReadonlyMap<string, Constructor> = new Map([
-  ["Some", { typeName: "Option", variant: "Some", arity: 1 }],
-  ["None", { typeName: "Option", variant: "None", arity: 0 }],
-  ["Ok", { typeName: "Result", variant: "Ok", arity: 1 }],
-  ["Err", { typeName: "Result", variant: "Err", arity: 1 }],
-]);
+// Every constructor of the built-in sum and record types (Some, Ok, NotFound, FileInfo, …).
+export const BUILTIN_CONSTRUCTORS: ReadonlyMap<string, Constructor> = new Map(
+  BUILTIN_TYPE_DEFS.flatMap((def): [string, Constructor][] =>
+    def.kind === "sum"
+      ? def.variants.map((v) => [v.name, { typeName: def.name, variant: v.name, arity: v.fields.length }])
+      : def.kind === "product"
+        ? [[def.name, { typeName: def.name, variant: null, arity: def.fields.length, fields: def.fields.map((f) => f.name) }]]
+        : [],
+  ),
+);
 
 // 배열 (arrays): [xs는 배열: 1, 2, 3], [n은 배열 길이: xs], [ys는 배열 자르기: xs, 1, 3].
 export const ARRAY_NAMESPACE = "배열";
@@ -95,6 +100,23 @@ export function elaborate(
 
   const construct = (ctor: Constructor, args: Expr[]) => typed({ node: "Construct", typeName: ctor.typeName, variant: ctor.variant, args });
 
+  // Arguments in declaration order. Named arguments ([점: 세로=4, 가로=3]) are matched to
+  // the record's fields by name: every field once, no others, in any order.
+  const ordered = (ctor: Constructor, c: CallAst): Expr[] => {
+    const args = c.args.map(expr);
+    if (c.fields === null) return args;
+    const label = ctor.variant ?? ctor.typeName;
+    if (!ctor.fields) unknown(`'${label}' takes its fields in order; only a record's fields have names`);
+    const fields = ctor.fields as readonly string[];
+    const twice = c.fields.find((f, i) => c.fields?.indexOf(f) !== i);
+    if (twice) unknown(`field '${twice}' is given twice`);
+    const stray = c.fields.find((f) => !fields.includes(f));
+    if (stray) unknown(`'${label}' has no field '${stray}'; it has ${fields.join(", ")}`);
+    const missing = fields.filter((f) => !c.fields?.includes(f));
+    if (missing.length > 0) unknown(`'${label}' needs ${missing.map((f) => `'${f}'`).join(", ")} too`);
+    return fields.map((f) => args[c.fields?.indexOf(f) ?? -1] as Expr);
+  };
+
   // A constructor's name never names a noun, so reading 'None' means the same thing
   // wherever it is written.
   const noun = (name: string): NounId => {
@@ -108,7 +130,12 @@ export function elaborate(
   const expr = (e: ExprAst): Expr => {
     switch (e.kind) {
       case "int":
-        return typed({ node: "Literal", value: int(e.value) });
+        if (e.suffix === "f32" || e.suffix === "f64") throw new Error("the parser makes float literals of float suffixes");
+        return typed({ node: "Literal", value: int(e.value), ...(e.suffix ? { declared: e.suffix } : {}) });
+      case "float":
+        return typed({ node: "Literal", value: float(e.value), ...(e.suffix ? { declared: e.suffix } : {}) });
+      case "rune":
+        return typed({ node: "Literal", value: rune(e.value) });
       case "text":
         return typed({ node: "Literal", value: text(e.value) });
       case "bool":
@@ -182,11 +209,13 @@ export function elaborate(
       const plane = scope.planes.get(name);
       if (plane) return { plane };
       const ctor = constructorIn(scope, name);
-      if (ctor) return construct(ctor, args());
+      if (ctor) return construct(ctor, ordered(ctor, c));
+      if (c.fields !== null) unknown("only a record is built from named fields");
       if (name === ARRAY_NAMESPACE) return typed({ node: "ArrayLiteral", elements: args() });
       return unknown(`'${name}' is not a callable plane or a constructor here`);
     }
     const namespace = first ?? "";
+    if (c.fields !== null && !scope.imports.get(namespace)?.constructors.has(second)) unknown("only a record is built from named fields");
     if (namespace === ARRAY_NAMESPACE) {
       const a = args();
       if (second === "길이" && a.length === 1) return typed({ node: "Length", base: a[0] });
@@ -198,7 +227,7 @@ export function elaborate(
       const plane = imported.planes.get(second);
       if (plane) return { plane };
       const ctor = imported.constructors.get(second);
-      if (ctor) return construct(ctor, args());
+      if (ctor) return construct(ctor, ordered(ctor, c));
       return unknown(`module '${namespace}' has no callable plane or constructor '${second}'`);
     }
     const resolution = resolveCallable(namespace, second);
@@ -219,7 +248,11 @@ export function elaborate(
       case "wildcard":
         return { kind: "wildcard" };
       case "literal":
-        return { kind: "literal", value: p.value.kind === "int" ? int(p.value.value) : p.value.kind === "text" ? text(p.value.value) : bool(p.value.value) };
+        return {
+          kind: "literal",
+          value:
+            p.value.kind === "int" ? int(p.value.value) : p.value.kind === "text" ? text(p.value.value) : p.value.kind === "rune" ? rune(p.value.value) : bool(p.value.value),
+        };
       case "name": {
         const [first, second] = p.path;
         const ctor =
@@ -299,9 +332,12 @@ export function elaborate(
       case "declare":
         return node({ node: "TemporalDeclare", noun: noun(s.noun) });
       case "add":
-      case "subtract": {
+      case "subtract":
+      case "multiply":
+      case "divide": {
         const amount = expr(s.amount);
-        return store(s.place, (current) => typed({ node: s.kind === "add" ? "Add" : "Sub", left: current, right: amount }));
+        const op = ({ add: "Add", subtract: "Sub", multiply: "Mul", divide: "Div" } as const)[s.kind];
+        return store(s.place, (current) => typed({ node: op, left: current, right: amount }));
       }
       case "say":
         return node({ node: "Eval", expr: typed({ node: "Call", callee: PRINTLN, args: [expr(s.value)] }) });
@@ -336,7 +372,9 @@ export function elaborate(
       case "fixed":
         return node({ node: "TemporalFixedPoint" });
       case "when": {
-        const eq = typed({ node: "Eq", left: expr(s.condition.left), right: expr(s.condition.right) });
+        const { left, right, order } = s.condition;
+        if (order) return node({ node: "Branch", condition: typed({ node: "Compare", op: order, left: expr(left), right: expr(right) }), then: stmt(s.then) });
+        const eq = typed({ node: "Eq", left: expr(left), right: expr(right) });
         return node({
           node: "Branch",
           condition: s.condition.negated ? typed({ node: "Not", operand: eq }) : eq,

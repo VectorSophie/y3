@@ -1,5 +1,9 @@
 # Y3 v2: the typed semantic core (M5)
 
+> **Since M7** `Int` is gone: integer literals are `i64` by default, temporal integers
+> are `bigint`, and a temporal value is `bigint` or `Text`. See
+> `docs/v2-runtime-model.md`. This document describes M5 as it was built.
+
 M5 puts a typed semantic layer between Korean and execution. This layer is Y3's
 equivalent of a compiler's HIR. Every later subsystem targets it: callable planes,
 records, modules, a bytecode. The runtime no longer sees sentences.
@@ -60,13 +64,14 @@ The two kinds of unknown are kept apart:
 | owned by | the type checker (`types/`) | the temporal store (`temporal/`) |
 | solved | before the run, by unification | during the run, by `A x = b` |
 | from `[값은 미정이다.]` | `T(값)` | a fresh α |
-| from `[값에 1을 더한다.]` | `T(값) = Int` | `값 := α + 1` |
-| from `[값은 4였다.]` | `T(값) = Int` (agrees) | `α + 1 = 4` |
+| from `[값에 1을 더한다.]` | `T(값) = bigint` (M5: `Int`) | `값 := α + 1` |
+| from `[값은 4였다.]` | `T(값) = bigint` (agrees) | `α + 1 = 4` |
 
 The two systems share no variables. They meet in exactly one rule:
 
-> **A temporal value has type Int or Text.** These are the two sorts the temporal solver
-> knows: Int goes into the integer matrix, Text into unification.
+> **A temporal value has type bigint or Text.** These are the two sorts the temporal solver
+> knows: bigint goes into the integer matrix, Text into unification. (M5 said `Int`; M7
+> made the unbounded integer explicit, `docs/v2-runtime-model.md` §1.8.)
 
 A `미정`, a channel or a `끝의` read of a Bool is refused at check (`Y3Y004`). The
 temporal solver is unchanged.
@@ -104,12 +109,12 @@ Surface forms become ordinary nodes:
 
 ```
 (0,0,0) 5:1  TemporalDeclare 값#1
-(0,1,0) 6:1  StoreNoun 값#1 ← Add(값#1 : Int, 1 : Int) : Int
-(0,2,0) 7:1  Eval Call std.io.println(값#1 : Int) : Unit
-(0,3,0) 8:1  TemporalAssert 값#1 = 4 : Int
+(0,1,0) 6:1  StoreNoun 값#1 ← Add(값#1 : bigint, 1 : bigint) : bigint
+(0,2,0) 7:1  Eval Call std.io.println(값#1 : bigint) : Unit
+(0,3,0) 8:1  TemporalAssert 값#1 = 4 : bigint
 (0,4,0) 9:1  End
 nouns:
-  값#1 : Int
+  값#1 : bigint
 ```
 
 The runtime executes HIR only. It receives a `CompiledProgram` (`ir/program`): the
@@ -207,7 +212,7 @@ gives them surface syntax without changing the IR or the checker.
 | `Y3Y001` | type mismatch |
 | `Y3Y002` | unknown namespace or callable |
 | `Y3Y003` | wrong number of arguments or fields |
-| `Y3Y004` | a temporal value that is not Int or Text |
+| `Y3Y004` | a temporal value that is not bigint or Text |
 | `Y3Y005` | a match that is not exhaustive |
 | `Y3Y006` | unknown type, variant, field or local |
 | `Y3Y007` | a name bound twice in one pattern |

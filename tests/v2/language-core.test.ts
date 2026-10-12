@@ -49,7 +49,7 @@ const effects = (result: ProgramResult) => result.trace.flatMap((e) => e.effects
 // A volume of one column, then a ※ section.
 const program = (cells: string[], appendix = "") => `⟦\n${cells.map((c) => `[${c}]`).join("\n")}\n⟧\n${appendix ? `\n※\n\n${appendix}` : ""}`;
 
-const SQUARE = `:제곱: (수: Int) → Int ⟦
+const SQUARE = `:제곱: (수: i64) → i64 ⟦
 [곱은 0이다.]
 [번은 0이다.]
 [여기가 처음이다.]
@@ -68,7 +68,7 @@ describe("callable planes", () => {
   });
 
   it("pass arguments by value: the callee's parameter is its own noun", () => {
-    const appendix = `:바꾼다: (수: Int) → Int ⟦
+    const appendix = `:바꾼다: (수: i64) → i64 ⟦
 [수에 100을 더한다.]
 [수를 돌려준다.]
 ⟧
@@ -78,7 +78,7 @@ describe("callable planes", () => {
   });
 
   it("return several values, Go-style, into several nouns", () => {
-    const appendix = `:합차: (가: Int, 나: Int) → (Int, Int) ⟦
+    const appendix = `:합차: (가: i64, 나: i64) → (i64, i64) ⟦
 [합은 가이다.]
 [합에 나를 더한다.]
 [차는 가이다.]
@@ -105,7 +105,7 @@ describe("callable planes", () => {
   });
 
   it("recurse: each activation has its own nouns", () => {
-    const appendix = `:누적: (수: Int) → Int ⟦
+    const appendix = `:누적: (수: i64) → i64 ⟦
 [수가 0이면 0을 돌려준다.]
 [작은것은 수이다.]
 [작은것에서 1을 뺀다.]
@@ -129,7 +129,7 @@ describe("callable planes", () => {
   });
 
   it("are bounded by the step limit, not by a separate depth limit", () => {
-    const appendix = `:영원: (수: Int) → Int ⟦
+    const appendix = `:영원: (수: i64) → i64 ⟦
 [또는 영원: 수]
 [또를 돌려준다.]
 ⟧
@@ -141,7 +141,7 @@ describe("callable planes", () => {
 
 describe("frames restore the caller's pose", () => {
   // The callee turns left (facing 동) and climbs no stairs; the caller keeps walking 남.
-  const TURNING = `:합차: (가: Int, 나: Int) → (Int, Int) ⟦
+  const TURNING = `:합차: (가: i64, 나: i64) → (i64, i64) ⟦
 [합은 가이다.] [ ] [ ] [ ]
 [합에 나를 더한다.] [ ] [ ] [ ]
 [왼쪽을 본다.] [차는 가이다.] [차에서 나를 뺀다.] [합과 차를 돌려준다.]
@@ -184,7 +184,7 @@ ${SQUARE}`;
   it("keeps each recursive activation's return pose", () => {
     // Each activation turns (동, then 남 again in a second column) before it recurses;
     // the stack of return poses must unwind exactly.
-    const turning = `:돈다: (수: Int) → Int ⟦
+    const turning = `:돈다: (수: i64) → i64 ⟦
 [수가 0이면 0을 돌려준다.] [ ]
 [왼쪽을 본다.] [오른쪽을 본다.]
 [ ] [작은것은 수이다.]
@@ -242,7 +242,7 @@ ${plane("끝이다.")}
   }
 
   it("calls are not jumps: a back-edge in a callee cannot reach the caller's anchor", () => {
-    const appendix = `:도망: () → Int ⟦
+    const appendix = `:도망: () → i64 ⟦
 [끝은 처음이다.]
 ⟧
 `;
@@ -259,7 +259,7 @@ ${plane("끝이다.")}
 
 describe("lexical scope", () => {
   it("a callee cannot see the caller's nouns", () => {
-    const appendix = `:엿보기: () → Int ⟦
+    const appendix = `:엿보기: () → i64 ⟦
 [비밀을 돌려준다.]
 ⟧
 `;
@@ -276,7 +276,7 @@ describe("lexical scope", () => {
     const { program: compiled } = compile(program(["값은 3이다.", "글은 글로: \"셋\"", "글을 말한다.", "값을 말한다.", "끝이다."], appendix));
     const p = compiled as CompiledProgram;
     expect(p.nouns.map((n) => [n.name, formatType(n.type)])).toEqual([
-      ["값", "Int"],
+      ["값", "i64"],
       ["글", "Text"],
     ]);
     expect([...p.procedures.values()][0]?.nouns.map((n) => [n.name, formatType(n.type)])).toEqual([["값", "Text"]]);
@@ -314,7 +314,7 @@ describe("lexical scope", () => {
 });
 
 describe("temporal values through calls", () => {
-  const PLUS_ONE = `:하나더: (수: Int) → Int ⟦
+  const PLUS_ONE = `:하나더: (수: bigint) → bigint ⟦
 [수에 1을 더한다.]
 [수를 돌려준다.]
 ⟧
@@ -340,7 +340,7 @@ describe("temporal values through calls", () => {
   });
 
   it("a channel closes through a call: β = 2β is self-caused 0", () => {
-    const appendix = `:두배: (n: Int) → Int ⟦
+    const appendix = `:두배: (n: bigint) → bigint ⟦
 [n에 n을 더한다.]
 [n을 돌려준다.]
 ⟧
@@ -351,7 +351,7 @@ describe("temporal values through calls", () => {
   });
 
   it("a promise made in a callee with no open cycle falls due when the call returns", () => {
-    const appendix = `:약속: () → Int ⟦
+    const appendix = `:약속: () → bigint ⟦
 [k는 미정이다.]
 [k는 5일 것이다.]
 [k를 돌려준다.]
@@ -363,7 +363,7 @@ describe("temporal values through calls", () => {
   });
 
   it("branching on a symbolic argument inside a callee is UNRESOLVED there", () => {
-    const appendix = `:판단: (수: Int) → Int ⟦
+    const appendix = `:판단: (수: bigint) → i64 ⟦
 [수가 1이면 1을 돌려준다.]
 [0을 돌려준다.]
 ⟧
@@ -380,8 +380,8 @@ describe("temporal values through calls", () => {
 });
 
 describe("records and sums", () => {
-  const TYPES = `자료 점 = { 가로: Int, 세로: Int }
-자료 모양 = 원(Int) | 사각(Int, Int) | 빈모양
+  const TYPES = `자료 점 = { 가로: i64, 세로: i64 }
+자료 모양 = 원(i64) | 사각(i64, i64) | 빈모양
 자료 쌍<A, B> = { 첫: A, 둘: B }
 `;
 
@@ -400,23 +400,23 @@ describe("records and sums", () => {
 
   it("instantiate generic records", () => {
     const { program: p } = compile(program(['p는 쌍: 1, "하나"', "x는 p의 둘이다.", "x를 말한다.", "끝이다."], TYPES));
-    expect(p?.nouns.map((n) => `${n.name}: ${formatType(n.type)}`)).toEqual(["p: 쌍<Int, Text>", "x: Text"]);
+    expect(p?.nouns.map((n) => `${n.name}: ${formatType(n.type)}`)).toEqual(["p: 쌍<i64, Text>", "x: Text"]);
   });
 
   it("refuses wrong fields and field types", () => {
     expect(errors(program(['위치는 점: 1, "둘"', "x는 위치의 높이이다.", "끝이다."], TYPES))).toEqual([
-      `Y3Y001 [위치는 점: 1, "둘"] field 2 of '점' must be Int, not Text`,
+      `Y3Y001 [위치는 점: 1, "둘"] field 2 of '점' must be i64, not Text`,
       "Y3Y006 [x는 위치의 높이이다.] '점' has no field '높이'; it has 가로, 세로",
     ]);
   });
 
   it("refuses bad declarations and name clashes", () => {
-    expect(errors(program(["끝이다."], "자료 점 = { 가로: Int, 가로: Int }\n"))).toEqual([
-      "Y3C006 [자료 점 = { 가로: Int, 가로: Int }] field '가로' appears twice",
+    expect(errors(program(["끝이다."], "자료 점 = { 가로: i64, 가로: i64 }\n"))).toEqual([
+      "Y3C006 [자료 점 = { 가로: i64, 가로: i64 }] field '가로' appears twice",
     ]);
     expect(errors(program(["끝이다."], "자료 가 = { x: 없는타입 }\n"))).toEqual(["Y3C006 [자료 가 = { x: 없는타입 }] unknown type '없는타입'"]);
-    expect(errors(program(["끝이다."], "자료 가 = Some(Int)\n"))).toEqual(["Y3C007 constructor 'Some' is already defined"]);
-    expect(errors(program(["끝이다."], "자료 Option = { x: Int }\n"))).toEqual(["Y3C007 type 'Option' is already defined"]);
+    expect(errors(program(["끝이다."], "자료 가 = Some(i64)\n"))).toEqual(["Y3C007 constructor 'Some' is already defined"]);
+    expect(errors(program(["끝이다."], "자료 Option = { x: i64 }\n"))).toEqual(["Y3C007 type 'Option' is already defined"]);
   });
 
   it("a constructor's name never names a noun", () => {
@@ -424,7 +424,7 @@ describe("records and sums", () => {
   });
 
   it("allows recursive types", () => {
-    const list = "자료 목록 = 마디(Int, 목록) | 끝마디\n";
+    const list = "자료 목록 = 마디(i64, 목록) | 끝마디\n";
     const result = run(program(["빈것은 끝마디이다.", "하나는 마디: 1, 빈것", "둘은 마디: 2, 하나", "머리는 둘에 따라: 마디(h, _) → h, 끝마디 → 0", "머리를 말한다.", "끝이다."], list));
     expect(result.output).toEqual(["2"]);
   });
@@ -432,7 +432,7 @@ describe("records and sums", () => {
 
 describe("Option and Result: ordinary errors are values", () => {
   it("are built, returned and matched; there is no null", () => {
-    const appendix = `:찾기: (수: Int) → Option<Int> ⟦
+    const appendix = `:찾기: (수: i64) → Option<i64> ⟦
 [수가 0이면 None을 돌려준다.]
 [o는 Some: 수]
 [o를 돌려준다.]
@@ -443,7 +443,7 @@ describe("Option and Result: ordinary errors are values", () => {
   });
 
   it("a Result is matched, never thrown", () => {
-    const appendix = `:나눔: (수: Int, 나눌수: Int) → Result<Int, Text> ⟦
+    const appendix = `:나눔: (수: i64, 나눌수: i64) → Result<i64, Text> ⟦
 [나눌수가 0이면 "0으로 나눌 수 없다"를 말한다.]
 [r은 Ok: 수]
 [나눌수가 0이면 r은 Err: "0"]
@@ -470,7 +470,7 @@ describe("arrays and slices", () => {
 
   it("types [T; N] and []T, with element reads by 번", () => {
     const { program: p } = compile(program(["수들은 배열: 1, 2", "s는 배열 자르기: 수들, 0, 1", "i는 1이다.", "x는 수들의 i번이다.", "끝이다."]));
-    expect(p?.nouns.map((n) => `${n.name}: ${formatType(n.type)}`)).toEqual(["수들: [Int; 2]", "s: []Int", "i: Int", "x: Int"]);
+    expect(p?.nouns.map((n) => `${n.name}: ${formatType(n.type)}`)).toEqual(["수들: [i64; 2]", "s: []i64", "i: i64", "x: i64"]);
   });
 
   it("checks bounds at run time: FAULT, not a wrapped value", () => {
@@ -486,13 +486,13 @@ describe("arrays and slices", () => {
 
   it("refuses a write through a slice, and mixed element types", () => {
     expect(errors(program(["수들은 배열: 1, 2", "s는 배열 자르기: 수들, 0, 1", "s의 0번은 5이다.", "끝이다."]))).toEqual([
-      "Y3Y001 [s의 0번은 5이다.] a slice ([]Int) is a view of an array; write the element through the array",
+      "Y3Y001 [s의 0번은 5이다.] a slice ([]{integer}) is a view of an array; write the element through the array",
     ]);
-    expect(errors(program(['수들은 배열: 1, "둘"', "끝이다."]))).toEqual(['Y3Y001 [수들은 배열: 1, "둘"] every element of an array must be Int, not Text']);
+    expect(errors(program(['수들은 배열: 1, "둘"', "끝이다."]))).toEqual(['Y3Y001 [수들은 배열: 1, "둘"] every element of an array must be {integer}, not Text']);
   });
 
   it("passes arrays to callable planes by value", () => {
-    const appendix = `:첫째: (수들: [Int; 3]) → Int ⟦
+    const appendix = `:첫째: (수들: [i64; 3]) → i64 ⟦
 [수들의 0번은 0이다.]
 [x는 수들의 0번이다.]
 [x를 돌려준다.]
@@ -510,10 +510,10 @@ name = "기하"
 
 ※
 
-자료 점 = { 가로: Int, 세로: Int }
-자료 모양 = 원(Int) | 없는모양
+자료 점 = { 가로: i64, 세로: i64 }
+자료 모양 = 원(i64) | 없는모양
 
-:넓이: (p: 점) → Int ⟦
+:넓이: (p: 점) → i64 ⟦
 [x는 p의 가로이다.]
 [x에 p의 세로를 더한다.]
 [x를 돌려준다.]
@@ -558,7 +558,7 @@ ${program(cells)}`;
   it("reports an imported module's errors under its path", () => {
     const broken = GEO.replace("[x를 돌려준다.]", '[x는 "글"이다.]');
     expect(errors(importing("도형", ["끝이다."]), { "geo.y3": broken })).toEqual([
-      `Y3Y001 geo.y3: [x는 "글"이다.] 'x' holds Int since [x는 p의 가로이다.] (line 11), not Text`,
+      `Y3Y001 geo.y3: [x는 "글"이다.] 'x' holds i64 since [x는 p의 가로이다.] (line 11), not Text`,
     ]);
   });
 });
@@ -582,10 +582,10 @@ describe("static rules for calls", () => {
   it("checks arity and argument types against the signature", () => {
     expect(errors(program(["x는 제곱: 1, 2", 'y는 제곱: "셋"', "끝이다."], SQUARE))).toEqual([
       "Y3Y003 [x는 제곱: 1, 2] ':제곱:' takes 1 argument, not 2",
-      `Y3Y001 [y는 제곱: "셋"] argument 1 of ':제곱:' must be Int, not Text`,
+      `Y3Y001 [y는 제곱: "셋"] argument 1 of ':제곱:' must be i64, not Text`,
     ]);
-    expect(errors(program(["끝이다."], ":f: (x: Int) → Int ⟦ [\"글\"을 돌려준다.] ⟧\n"))).toEqual([
-      `Y3Y001 ["글"을 돌려준다.] returned value 1 must be Int, not Text`,
+    expect(errors(program(["끝이다."], ":f: (x: i64) → i64 ⟦ [\"글\"을 돌려준다.] ⟧\n"))).toEqual([
+      `Y3Y001 ["글"을 돌려준다.] returned value 1 must be i64, not Text`,
     ]);
   });
 
@@ -596,8 +596,8 @@ describe("static rules for calls", () => {
   });
 
   it("refuses malformed signatures and duplicate parameters", () => {
-    expect(errors(program(["끝이다."], ":f: (x Int) ⟦ [돌아간다.] ⟧\n"))).toEqual(["Y3C005 :f: (x Int): expected ':' but found 'Int'"]);
-    expect(errors(program(["끝이다."], ":f: (x: Int, x: Int) ⟦ [돌아간다.] ⟧\n"))).toEqual(["Y3C005 :f: (x: Int, x: Int): parameter 'x' appears twice"]);
+    expect(errors(program(["끝이다."], ":f: (x i64) ⟦ [돌아간다.] ⟧\n"))).toEqual(["Y3C005 :f: (x i64): expected ':' but found 'i64'"]);
+    expect(errors(program(["끝이다."], ":f: (x: i64, x: i64) ⟦ [돌아간다.] ⟧\n"))).toEqual(["Y3C005 :f: (x: i64, x: i64): parameter 'x' appears twice"]);
   });
 });
 
@@ -626,7 +626,7 @@ describe("surface syntax", () => {
 
 describe("adversarial cases", () => {
   it("a callee cannot close the caller's channel: channels belong to a frame's nouns", () => {
-    const appendix = `:보내기: (수: Int) ⟦
+    const appendix = `:보내기: (수: bigint) ⟦
 [수를 전으로 보낸다.]
 [돌아간다.]
 ⟧
@@ -636,7 +636,7 @@ describe("adversarial cases", () => {
   });
 
   it("a channel left open in a callee is reported unanswered when it returns", () => {
-    const appendix = `:열기: () → Int ⟦
+    const appendix = `:열기: () → bigint ⟦
 [b가 다음에서 온다.]
 [b를 돌려준다.]
 ⟧
@@ -647,7 +647,7 @@ describe("adversarial cases", () => {
   });
 
   it("returning from inside a loop closes the loop: its promises fall due first", () => {
-    const appendix = `:고리: () → Int ⟦
+    const appendix = `:고리: () → bigint ⟦
 [k는 미정이다.]
 [여기가 처음이다.]
 [k는 2일 것이다.]
@@ -660,7 +660,7 @@ describe("adversarial cases", () => {
   });
 
   it("an open symbol returned and never constrained makes the output AMBIGUOUS", () => {
-    const appendix = `:모름: () → Int ⟦
+    const appendix = `:모름: () → bigint ⟦
 [y는 미정이다.]
 [y를 돌려준다.]
 ⟧
@@ -680,16 +680,16 @@ describe("adversarial cases", () => {
 
   it("writes through nested places: an element's field, an element of an element", () => {
     const result = run(
-      program(["p는 점: 1, 2", "q는 점: 3, 4", "점들은 배열: p, q", "점들의 1번의 가로는 30이다.", "점들을 말한다.", "끝이다."], "자료 점 = { 가로: Int, 세로: Int }\n"),
+      program(["p는 점: 1, 2", "q는 점: 3, 4", "점들은 배열: p, q", "점들의 1번의 가로는 30이다.", "점들을 말한다.", "끝이다."], "자료 점 = { 가로: i64, 세로: i64 }\n"),
     );
     expect(result.output).toEqual(["[점(1, 2), 점(30, 4)]"]);
     expect(run(program(["행은 배열: 1, 2", "표는 배열: 행, 행", "표의 0번의 1번은 9이다.", "표를 말한다.", "끝이다."])).output).toEqual(["[[1, 9], [1, 2]]"]);
   });
 
   it("canonicalises a signature's arrow", () => {
-    const loaded = loadDocument(program(["끝이다."], ":f: (x: Int) -> Int ⟦ [x를 돌려준다.] ⟧\n"));
-    expect(loaded.ast?.appendix?.definitions[0]?.signature).toBe("(x: Int) -> Int");
-    expect(formatDocumentOf(program(["끝이다."], ":f: (x: Int) -> Int ⟦ [x를 돌려준다.] ⟧\n"))).toContain(":f: (x: Int) → Int ⟦");
+    const loaded = loadDocument(program(["끝이다."], ":f: (x: i64) -> i64 ⟦ [x를 돌려준다.] ⟧\n"));
+    expect(loaded.ast?.appendix?.definitions[0]?.signature).toBe("(x: i64) -> i64");
+    expect(formatDocumentOf(program(["끝이다."], ":f: (x: i64) -> i64 ⟦ [x를 돌려준다.] ⟧\n"))).toContain(":f: (x: i64) → i64 ⟦");
   });
 
   it("a plane with no signature cannot be called: composition and calls stay apart", () => {
@@ -697,7 +697,7 @@ describe("adversarial cases", () => {
   });
 
   it("a module's volume is never run when it is imported", () => {
-    const lib = `+++\nname = "라이브러리"\n+++\n\n⟦\n["실행되면 안 된다"를 말한다.]\n[끝이다.]\n⟧\n\n※\n\n:하나: () → Int ⟦ [1을 돌려준다.] ⟧\n`;
+    const lib = `+++\nname = "라이브러리"\n+++\n\n⟦\n["실행되면 안 된다"를 말한다.]\n[끝이다.]\n⟧\n\n※\n\n:하나: () → i64 ⟦ [1을 돌려준다.] ⟧\n`;
     const result = run(`+++\n[imports]\n"라" = "lib.y3"\n+++\n\n${program(["x는 라 하나:", "x를 말한다.", "끝이다."])}`, { "lib.y3": lib });
     expect(result.output).toEqual(["1"]);
   });
@@ -711,10 +711,10 @@ function formatDocumentOf(source: string): string {
 
 describe("ambiguous call heads", () => {
   // [길이 계산: 3] reads as module 길이's 계산, or as noun 길 (+이) receiving local 계산.
-  const LIB = `+++\nname = "에이"\n+++\n\n※\n\n:계산: (x: Int) → Int ⟦\n[x에 100을 더한다.]\n[x를 돌려준다.]\n⟧\n`;
-  const OTHER = `+++\nname = "씨"\n+++\n\n※\n\n:다른것: () → Int ⟦\n[1을 돌려준다.]\n⟧\n`;
+  const LIB = `+++\nname = "에이"\n+++\n\n※\n\n:계산: (x: i64) → i64 ⟦\n[x에 100을 더한다.]\n[x를 돌려준다.]\n⟧\n`;
+  const OTHER = `+++\nname = "씨"\n+++\n\n※\n\n:다른것: () → i64 ⟦\n[1을 돌려준다.]\n⟧\n`;
   const files: Files = { "a.y3": LIB, "c.y3": OTHER };
-  const LOCAL = ":계산: (x: Int) → Int ⟦\n[x를 돌려준다.]\n⟧\n";
+  const LOCAL = ":계산: (x: i64) → i64 ⟦\n[x를 돌려준다.]\n⟧\n";
   const withImports = (imports: [string, string][], body: string) =>
     imports.length === 0 ? body : `+++\n[imports]\n${imports.map(([a, p]) => `"${a}" = "${p}"`).join("\n")}\n+++\n\n${body}`;
   const plainBody = program(["길이 계산: 3", "길을 말한다.", "끝이다."], LOCAL);
