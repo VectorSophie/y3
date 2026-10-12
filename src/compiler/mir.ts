@@ -20,7 +20,10 @@ import type { BodyId, Cfg, CfgNode, Edge, Target } from "./cfg";
 export type Reg = number;
 
 export type MirOp =
-  | { readonly op: "const"; readonly dst: Reg; readonly value: ConcreteValue }
+  // Types are explicit where the operands alone do not determine them: a literal (3
+  // could be any integer type), a construction (None's argument) and an array (an empty
+  // one). Everywhere else the bytecode verifier derives a register's type.
+  | { readonly op: "const"; readonly dst: Reg; readonly value: ConcreteValue; readonly type: Type }
   | { readonly op: "load"; readonly dst: Reg; readonly noun: NounId } // a noun's value, settled; records a use
   | { readonly op: "recorded"; readonly dst: Reg; readonly noun: NounId } // the version itself, symbolic identity kept
   | { readonly op: "anchorRead"; readonly dst: Reg; readonly noun: NounId; readonly moment: Moment }
@@ -31,11 +34,11 @@ export type MirOp =
   | { readonly op: "eq"; readonly dst: Reg; readonly a: Reg; readonly b: Reg }
   | { readonly op: "order"; readonly dst: Reg; readonly order: OrderOp; readonly a: Reg; readonly b: Reg }
   | { readonly op: "builtin"; readonly dst: Reg; readonly callee: CallableId; readonly args: readonly Reg[]; readonly types: { readonly args: readonly Type[]; readonly result: Type } }
-  | { readonly op: "construct"; readonly dst: Reg; readonly type: string; readonly variant: string | null; readonly fields: readonly Reg[] }
+  | { readonly op: "construct"; readonly dst: Reg; readonly type: string; readonly variant: string | null; readonly fields: readonly Reg[]; readonly result: Type }
   | { readonly op: "field"; readonly dst: Reg; readonly record: Reg; readonly index: number; readonly name: string }
   | { readonly op: "checkField"; readonly record: Reg; readonly index: number; readonly name: string }
   | { readonly op: "setField"; readonly dst: Reg; readonly record: Reg; readonly index: number; readonly value: Reg }
-  | { readonly op: "array"; readonly dst: Reg; readonly elements: readonly Reg[] }
+  | { readonly op: "array"; readonly dst: Reg; readonly elements: readonly Reg[]; readonly type: Type }
   | { readonly op: "index"; readonly dst: Reg; readonly base: Reg; readonly index: Reg }
   | { readonly op: "checkWritable"; readonly base: Reg }
   | { readonly op: "writePosition"; readonly dst: Reg; readonly base: Reg; readonly index: Reg }
@@ -119,7 +122,7 @@ export function lowerToMir(program: CompiledProgram, cfg: Cfg): Mir {
         case "Literal": {
           const d = dst();
           // At the literal's type: the same function the interpreter uses.
-          emit({ op: "const", dst: d, value: ops.literal(e.value, e.type) });
+          emit({ op: "const", dst: d, value: ops.literal(e.value, e.type), type: e.type });
           return d;
         }
         case "LoadNoun": {
@@ -178,7 +181,7 @@ export function lowerToMir(program: CompiledProgram, cfg: Cfg): Mir {
         case "Construct": {
           const fields = e.args.map((a) => needed(a, "a data value"));
           const d = dst();
-          emit({ op: "construct", dst: d, type: e.typeName, variant: e.variant, fields });
+          emit({ op: "construct", dst: d, type: e.typeName, variant: e.variant, fields, result: e.type });
           return d;
         }
         case "Field": {
@@ -198,7 +201,7 @@ export function lowerToMir(program: CompiledProgram, cfg: Cfg): Mir {
         case "ArrayLiteral": {
           const elements = e.elements.map((x) => needed(x, "an array"));
           const d = dst();
-          emit({ op: "array", dst: d, elements });
+          emit({ op: "array", dst: d, elements, type: e.type });
           return d;
         }
         case "Index": {

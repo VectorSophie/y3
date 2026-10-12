@@ -1,6 +1,6 @@
 import type { Coordinate } from "../space/manifest";
 import type { Space } from "../space/volume";
-import type { Type } from "../types/types";
+import type { Type, TypeDef } from "../types/types";
 import type { Noun, NounId, PlaneId, Stmt } from "./hir";
 
 // A compiled program: the space and, for every non-blank cell, its typed HIR. This is
@@ -27,6 +27,7 @@ export type Procedure = Body & {
 
 export type CompiledProgram = Body & {
   readonly procedures: ReadonlyMap<PlaneId, Procedure>; // every callable plane reachable from the program
+  readonly types: readonly TypeDef[]; // the program's own type declarations (built-in ones are implied)
 };
 
 export function coordinateKey(at: Coordinate): string {

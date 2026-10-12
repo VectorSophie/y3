@@ -391,7 +391,9 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
   if (!main || diagnostics.some((d) => d.severity === "error")) {
     return { program: null, diagnostics };
   }
-  return { program: { space: main.space, cells: main.cells, nouns: main.nouns, procedures }, diagnostics };
+  const builtin = new Set(new TypeTable().names());
+  const types = table.names().filter((n) => !builtin.has(n)).map((n) => table.get(n) as TypeDef);
+  return { program: { space: main.space, cells: main.cells, nouns: main.nouns, procedures, types }, diagnostics };
 }
 
 function inSourceOrder(cells: ReadonlyMap<string, Stmt>): Stmt[] {

@@ -1,6 +1,7 @@
 import { arith, NumericFault } from "../semantics/numeric";
 import type { ConcreteValue } from "../semantics/values";
 import type { Mir, MirBlock, MirOp, MirTerminator, Reg } from "./mir";
+import { prim, type Type } from "../types/types";
 
 // MIR optimizations (docs/v2-compiler-pipeline.md §6). They rewrite registers inside one
 // step and nothing else: no node, edge, cell, orientation, noun, temporal operation,
@@ -78,6 +79,7 @@ export function optimizeMir(mir: Mir): { mir: Mir; stats: OptimizationStats } {
     for (const b of step) for (const o of b.ops) for (const w of [...("dst" in o ? [o.dst] : []), ...(o.op === "test" ? o.binds.map((x) => x.reg) : [])]) writes.set(w, (writes.get(w) ?? 0) + 1);
     const once = (r: Reg) => writes.get(r) === 1;
     const constants = new Map<Reg, ConcreteValue>();
+    const constTypes = new Map<Reg, Type>(); // a folded value keeps its static type
     const alias = new Map<Reg, Reg>();
     const resolve = (r: Reg): Reg => {
       let x = r;
@@ -92,17 +94,24 @@ export function optimizeMir(mir: Mir): { mir: Mir; stats: OptimizationStats } {
       b.ops = b.ops.map((o0) => {
         const o = mapReads(o0, resolve);
         const k = (r: Reg) => constants.get(r);
-        if (o.op === "const" && once(o.dst)) constants.set(o.dst, o.value);
+        if (o.op === "const" && once(o.dst)) {
+          constants.set(o.dst, o.value);
+          constTypes.set(o.dst, o.type);
+        }
         if (o.op === "move" && once(o.dst) && once(o.src)) {
           alias.set(o.dst, o.src);
           stats.copies += 1;
-          if (constants.has(o.src)) constants.set(o.dst, constants.get(o.src) as ConcreteValue);
+          if (constants.has(o.src)) {
+            constants.set(o.dst, constants.get(o.src) as ConcreteValue);
+            constTypes.set(o.dst, constTypes.get(o.src) as Type);
+          }
           return o;
         }
         if (o.op === "now" && once(o.dst) && k(o.src)) {
           stats.folded += 1;
           constants.set(o.dst, k(o.src) as ConcreteValue);
-          return { op: "const", dst: o.dst, value: k(o.src) as ConcreteValue };
+          constTypes.set(o.dst, constTypes.get(o.src) as Type);
+          return { op: "const", dst: o.dst, value: k(o.src) as ConcreteValue, type: constTypes.get(o.src) as Type };
         }
         if (o.op === "arith" && o.type !== "bigint" && once(o.dst)) {
           const a = k(o.a);
@@ -112,7 +121,8 @@ export function optimizeMir(mir: Mir): { mir: Mir; stats: OptimizationStats } {
               const value = arith(o.arith, o.type, a, b2);
               stats.folded += 1;
               constants.set(o.dst, value);
-              return { op: "const", dst: o.dst, value };
+              constTypes.set(o.dst, prim(o.type));
+              return { op: "const", dst: o.dst, value, type: prim(o.type) };
             } catch (error) {
               if (!(error instanceof NumericFault)) throw error;
               return o; // it faults: leave it to fault at its own step

@@ -19,11 +19,13 @@ Y3BC 1
 | `magic`, `version` | `Y3BC`, `1`. Any other version is refused with "rebuild from source". |
 | `module`, `maxSteps`, `start` | the manifest's name, step limit and start pose |
 | `registers` | registers per step, at most |
-| `bodies` | the noun table (id, name) of the main volume and of each callable plane |
+| `bodies` | the noun table of the main volume and of each callable plane: id, name and **resolved type** |
+| `typedefs` | the program's own type declarations (records and sums); the built-in ones are implied |
 | `procedures` | callable planes: id, name, module, parameters (noun, name, type) and result types |
 | `constants` | literal values. Integers are strings, because they are unbounded. Floats keep `NaN`, `+Inf`, `-Inf` and `-0` exactly, with their width. |
 | `patterns` | match patterns, with their literals encoded like constants |
-| `types` | the resolved argument and result types of built-in calls (checked arithmetic and conversions need them) |
+| `types` | value types: the type of each literal (`const`), construction (`construct`) and array (`array`), the three places the operands alone do not determine it |
+| `callTypes` | the instantiated argument and result types of built-in calls (checked arithmetic and conversions need them) |
 | `edges` | CFG edges: kind, the machine instruction a trace reports, next pose, target |
 | `entries` | where each body starts |
 | `nodes` | **the debug map**: per CFG node, its body, full pose, sentence, plane and source span |
@@ -70,6 +72,63 @@ return with nothing to return to, or a runtime loop or frame that disagrees with
 each stop the VM with an internal `VmError`. None of them is ever reported as a program
 outcome.
 
+## The type verifier
+
+`.y3b` is directly executable (`y3 run artifact.y3b`), so it is an external format, and
+a hand-written artifact must not be able to express a program the type checker could
+never produce. After the structural checks, `compiler/verify-types.ts` proves the
+**typed-MIR invariant** from the artifact alone. It reads the serialized resolved types;
+it does not run the source type checker again.
+
+**The type model.** Types are the resolved `Type` values of the compiler: primitives,
+named types with arguments, arrays, slices, and open type variables. An open variable is
+a type the checker left open, such as a temporal noun only ever printed. The verifier
+treats it as **rigid**: it equals only itself, so it cannot stand in for anything else.
+
+Every type in the artifact must be well-formed: known primitives, declared or built-in
+names with the right number of arguments, and no type parameters outside a
+definition. Declarations may not redefine built-in types or be opaque.
+
+**Registers.** Inside each step the verifier tracks the type of every register on every
+path. A register has one type: if two paths reach a block with different types for the
+same register (a match's result, say), the artifact is refused.
+
+| Instruction | Rule |
+|---|---|
+| `const` | the constant is a value of its declared type: an integer in range, a float of matching width, a rune, Text, Bool, Unit, or data that fits its declaration |
+| `load`, `recorded`, `pastLeft` | the register takes the noun's type |
+| `assign`, `promise` | the value's type is the noun's type |
+| `past` | both sides have one type |
+| `anchorRead` | the noun's type; for `끝`, a temporal type |
+| `declare`, `receive` | the noun is `bigint`, `Text` or an open variable: only those reach the temporal store |
+| `move`, `now` | the source's type |
+| `arith` | both operands and the result are the instruction's numeric type |
+| `not` | Bool to Bool |
+| `eq` | operands of one type, giving Bool |
+| `order` | operands of one numeric type or Rune, giving Bool |
+| `builtin` | the registers' types are the call types' arguments. The call types are an instantiation of the callable's signature, with every type parameter bound consistently, the rest arguments respected, and the bounds (`number`, `integer`, `float`, `key`) satisfied |
+| `construct` | the result is the named type, and each field register has its field's instantiated type |
+| `field`, `checkField`, `setField` | the record's field, by declaration |
+| `array` | `[T; N]` with N elements, each of type T |
+| `index` | an array, slice or List element, with an `i64` index |
+| `setIndex`, `checkWritable`, `writePosition` | an array or List (never a slice), an `i64` position, a value of the element type |
+| `sliceBound`, `slice`, `length` | an array or slice, with `i64` bounds |
+| `test` | the pattern matches the scrutinee's type, and its bindings get the field types, available only on the matching branch |
+| `test` terminator | `bool`: a Bool register; `eq`/`order`: as the instructions |
+| `if` | a Bool register |
+| `call` | arguments have the parameter types; result nouns have the result types (a single result noun of a Unit plane is Unit) |
+| `return` | the values have the plane's result types |
+
+**Constants.**
+- A `rune` constant is a Unicode scalar value: U+0000–U+10FFFF, excluding the
+  surrogates U+D800–U+DFFF.
+- A width-32 `float` constant must already be a binary32 value: `Math.fround(v) === v`,
+  or NaN. It is refused otherwise, never silently rounded, so an artifact cannot carry
+  an `f32` that compiled source could not produce.
+
+The compiler remains responsible for writing correct bytecode. The loader proves,
+independently, the invariants the VM and the runtime rely on.
+
 ## The VM
 
 `runExecutable(executable, program, manifest, options)` holds:
@@ -101,3 +160,7 @@ CFG edges and holding values in registers.
 
 The bytecode version changes whenever an opcode, an operand's meaning or the layout
 changes. There is no cross-version loading: an artifact is rebuilt from source.
+
+Version 1 gained its type tables (`typedefs`, typed `bodies`, `types`, `callTypes`) and
+the typed `const`/`construct`/`array` operands before M8 was merged. No version-1
+artifact was ever released before that, so the number did not change.

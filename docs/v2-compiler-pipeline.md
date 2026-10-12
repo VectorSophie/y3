@@ -260,6 +260,17 @@ the debug map names the sentence and plane.
 12. **Are bytecode artifacts reproducible?** Yes. They are byte-identical for the same
     source and lock, as tested and checked by the CLI. A planted timestamp is caught.
 
+Decisions (M8 review):
+- **MIR and bytecode stay separate.** MIR is the compiler's in-memory representation;
+  Y3BC is a stable, versioned, independently verified serialization boundary. They share
+  one instruction vocabulary, not two semantic models.
+- **The 200k CFG cap stays.** It is a compiler resource limit, not language semantics.
+  Its error names the cause: too many (pose, open-loop) states.
+- **The HIR interpreter stays,** at least through M9 and M10, as the differential oracle.
+- **Particle allomorphs stay lint-only** in `fmt`.
+- **Git and the network are needed only at `y3 lock` time;** locked builds run from the
+  cache.
+
 Known limits:
 - **CFG size.** The CFG is capped at 200,000 nodes, because poses × anchor stacks could
   blow up in a pathological program. Real programs are small: every fixture and test

@@ -3,7 +3,8 @@ import { callable, CALLABLES } from "../ir/callables";
 import type { CompiledProgram, Procedure } from "../ir/program";
 import type { ConcreteValue } from "../semantics/values";
 import type { Pose } from "../space/manifest";
-import type { Type } from "../types/types";
+import type { Type, TypeDef } from "../types/types";
+import { verifyTypes } from "./verify-types";
 import type { Executable, NodeInfo } from "../runtime/vm";
 import type { BodyId, Edge, Target } from "./cfg";
 import type { Mir, MirBlock, MirOp, MirTerminator } from "./mir";
@@ -21,10 +22,10 @@ export class BytecodeError extends Error {}
 
 // ---- Operand kinds and the instruction table. The table is the encoding.
 
-type Kind = "reg" | "regs" | "noun" | "int" | "str" | "const" | "pattern" | "types" | "pose" | "moment" | "binds" | "strOrNull";
+type Kind = "reg" | "regs" | "noun" | "int" | "str" | "const" | "pattern" | "type" | "types" | "pose" | "moment" | "binds" | "strOrNull";
 
 const OPS: readonly (readonly [MirOp["op"], readonly (readonly [string, Kind])[]])[] = [
-  ["const", [["dst", "reg"], ["value", "const"]]],
+  ["const", [["dst", "reg"], ["value", "const"], ["type", "type"]]],
   ["load", [["dst", "reg"], ["noun", "noun"]]],
   ["recorded", [["dst", "reg"], ["noun", "noun"]]],
   ["anchorRead", [["dst", "reg"], ["noun", "noun"], ["moment", "moment"]]],
@@ -35,11 +36,11 @@ const OPS: readonly (readonly [MirOp["op"], readonly (readonly [string, Kind])[]
   ["eq", [["dst", "reg"], ["a", "reg"], ["b", "reg"]]],
   ["order", [["dst", "reg"], ["order", "str"], ["a", "reg"], ["b", "reg"]]],
   ["builtin", [["dst", "reg"], ["callee", "str"], ["args", "regs"], ["types", "types"]]],
-  ["construct", [["dst", "reg"], ["type", "str"], ["variant", "strOrNull"], ["fields", "regs"]]],
+  ["construct", [["dst", "reg"], ["type", "str"], ["variant", "strOrNull"], ["fields", "regs"], ["result", "type"]]],
   ["field", [["dst", "reg"], ["record", "reg"], ["index", "int"], ["name", "str"]]],
   ["checkField", [["record", "reg"], ["index", "int"], ["name", "str"]]],
   ["setField", [["dst", "reg"], ["record", "reg"], ["index", "int"], ["value", "reg"]]],
-  ["array", [["dst", "reg"], ["elements", "regs"]]],
+  ["array", [["dst", "reg"], ["elements", "regs"], ["type", "type"]]],
   ["index", [["dst", "reg"], ["base", "reg"], ["index", "reg"]]],
   ["checkWritable", [["base", "reg"]]],
   ["writePosition", [["dst", "reg"], ["base", "reg"], ["index", "reg"]]],
@@ -98,9 +99,13 @@ export function decodeValue(j: Json): ConcreteValue {
     const f = o.float;
     const value = f === "NaN" ? NaN : f === "-0" ? -0 : f === "+Inf" ? Infinity : f === "-Inf" ? -Infinity : f;
     if (typeof value !== "number" || (o.width !== 32 && o.width !== 64)) throw new BytecodeError("a malformed float constant");
+    // An f32 constant must be a binary32 value exactly: the compiler only writes those.
+    if (o.width === 32 && !Number.isNaN(value) && !Object.is(Math.fround(value), value)) throw new BytecodeError(`${String(f)} is not a binary32 value, so it cannot be an f32 constant`);
     return { kind: "float", value, width: o.width };
   }
-  if (typeof o.rune === "number" && Number.isInteger(o.rune) && o.rune >= 0 && o.rune <= 0x10ffff) return { kind: "rune", value: o.rune };
+  // A rune is a Unicode scalar value: U+0000–U+10FFFF, never a surrogate.
+  if (typeof o.rune === "number" && Number.isInteger(o.rune) && o.rune >= 0 && o.rune <= 0x10ffff && !(o.rune >= 0xd800 && o.rune <= 0xdfff)) return { kind: "rune", value: o.rune };
+  if ("rune" in o) throw new BytecodeError(`rune ${JSON.stringify(o.rune)} is not a Unicode scalar value`);
   if (typeof o.text === "string") return { kind: "text", value: o.text };
   if (typeof o.bool === "boolean") return { kind: "bool", value: o.bool };
   if (o.unit === true) return { kind: "unit" };
@@ -139,11 +144,14 @@ export type BytecodeModule = {
   readonly maxSteps: number;
   readonly start: Pose;
   readonly registers: number;
-  readonly bodies: readonly { readonly id: BodyId; readonly nouns: readonly [number, string][] }[];
+  // Resolved types, so the loader can verify the program without its source.
+  readonly bodies: readonly { readonly id: BodyId; readonly nouns: readonly [number, string, Json][] }[];
+  readonly typedefs: readonly Json[]; // the program's own type declarations
   readonly procedures: readonly { readonly id: PlaneId; readonly name: string; readonly module: string; readonly params: readonly { readonly noun: NounId; readonly name: string; readonly type: Type }[]; readonly results: readonly Type[] }[];
   readonly constants: readonly Json[];
   readonly patterns: readonly Json[];
-  readonly types: readonly Json[];
+  readonly types: readonly Json[]; // value types (const, construct, array)
+  readonly callTypes: readonly Json[]; // instantiated built-in call types
   readonly edges: readonly Json[];
   readonly entries: readonly [BodyId, Json][];
   readonly nodes: readonly Json[]; // the debug map: body, pose, sentence, plane, span per CFG node
@@ -171,7 +179,8 @@ export function encodeBytecode(mir: Mir, nodes: readonly NodeInfo[], program: Co
   };
   const constants = pool(encodeValue);
   const patterns = pool(encodePattern);
-  const types = pool((t: { args: readonly Type[]; result: Type }) => t as unknown as Json);
+  const types = pool((t: Type) => t as unknown as Json);
+  const callTypes = pool((t: { args: readonly Type[]; result: Type }) => t as unknown as Json);
   const edges = pool((e: Edge) => e as unknown as Json);
 
   const operand = (kind: Kind, v: unknown): Json => {
@@ -180,8 +189,10 @@ export function encodeBytecode(mir: Mir, nodes: readonly NodeInfo[], program: Co
         return constants.add(v as ConcreteValue);
       case "pattern":
         return patterns.add(v as Pattern);
+      case "type":
+        return types.add(v as Type);
       case "types":
-        return types.add(v as { args: readonly Type[]; result: Type });
+        return callTypes.add(v as { args: readonly Type[]; result: Type });
       case "binds":
         return (v as { local: string; reg: number }[]).map((b) => [b.local, b.reg]);
       default:
@@ -227,11 +238,13 @@ export function encodeBytecode(mir: Mir, nodes: readonly NodeInfo[], program: Co
     maxSteps: options.maxSteps,
     start: options.start,
     registers: mir.registers,
-    bodies: bodies.map((id) => ({ id, nouns: bodyOf(id).nouns.map((n) => [n.id, n.name] as [number, string]) })),
+    bodies: bodies.map((id) => ({ id, nouns: bodyOf(id).nouns.map((n) => [n.id, n.name, n.type as unknown as Json] as [number, string, Json]) })),
+    typedefs: program.types as unknown as Json[],
     procedures: [...program.procedures.values()].map((p) => ({ id: p.id, name: p.name, module: p.module, params: p.params.map((x) => ({ noun: x.noun, name: x.name, type: x.type })), results: p.results })),
     constants: constants.items,
     patterns: patterns.items,
     types: types.items,
+    callTypes: callTypes.items,
     edges: edges.items,
     entries: [...mir.cfg.entries].map(([id, t]) => [id, t as unknown as Json]),
     nodes: nodes.map((n) => n as unknown as Json),
@@ -275,7 +288,8 @@ export function loadBytecode(m: BytecodeModule): Loaded {
 
   const constants = m.constants.map(decodeValue);
   const patterns = m.patterns.map(decodePattern);
-  const types = m.types as unknown as { args: Type[]; result: Type }[];
+  const types = m.types as unknown as Type[];
+  const callTypes = m.callTypes as unknown as { args: Type[]; result: Type }[];
   const nodes = m.nodes as unknown as NodeInfo[];
   const bodies = new Map(m.bodies.map((b) => [b.id, new Set(b.nouns.map(([id]) => id))]));
   const procedures = new Map(m.procedures.map((p) => [p.id, p]));
@@ -357,9 +371,12 @@ export function loadBytecode(m: BytecodeModule): Loaded {
         case "pattern":
           if (!isInt(v, 0, patterns.length)) fail(where, `pattern ${String(v)} is not in the pool`);
           return patterns[v as number];
-        case "types":
-          if (!isInt(v, 0, types.length)) fail(where, `call types ${String(v)} are not in the pool`);
+        case "type":
+          if (!isInt(v, 0, types.length)) fail(where, `type ${String(v)} is not in the pool`);
           return types[v as number];
+        case "types":
+          if (!isInt(v, 0, callTypes.length)) fail(where, `call types ${String(v)} are not in the pool`);
+          return callTypes[v as number];
         case "pose":
           return v;
         case "moment":
@@ -450,12 +467,14 @@ export function loadBytecode(m: BytecodeModule): Loaded {
   });
 
   verifyRegisters(blocks, nodeBlock);
+  const nounTypes = new Map(m.bodies.map((b) => [b.id, new Map(b.nouns.map(([id, , type]) => [id, type as unknown as Type]))]));
+  verifyTypes({ blocks, nodeBlock, nodes, nounTypes, procedures: new Map(m.procedures.map((p) => [p.id, { params: p.params.map((x) => x.type), results: p.results }])), typedefs: m.typedefs as unknown as TypeDef[] });
   const entries = new Map(m.entries.map(([id, t]) => [id, target(t as unknown as Target, `entry ${id}`)]));
   if (!entries.has("main")) fail("module", "no entry for main");
 
   // What the runtime core needs to know about the program: nouns and callable planes.
   const empty = { manifest: null, layers: [] };
-  const nounsOf = (id: BodyId) => (m.bodies.find((b) => b.id === id)?.nouns ?? []).map(([nid, name]) => ({ id: nid, name, type: { kind: "var", id: 0 } as Type }));
+  const nounsOf = (id: BodyId) => (m.bodies.find((b) => b.id === id)?.nouns ?? []).map(([nid, name, type]) => ({ id: nid, name, type: type as unknown as Type }));
   const program: CompiledProgram = {
     space: empty,
     cells: new Map(),
@@ -463,6 +482,7 @@ export function loadBytecode(m: BytecodeModule): Loaded {
     procedures: new Map(
       m.procedures.map((p) => [p.id, { id: p.id, name: p.name, module: p.module, params: p.params, results: p.results, space: empty, cells: new Map(), nouns: nounsOf(p.id) } as Procedure]),
     ),
+    types: m.typedefs as unknown as TypeDef[],
   };
   return {
     executable: { blocks, nodeBlock, nodes, entries, registers: m.registers, start: m.start.position },

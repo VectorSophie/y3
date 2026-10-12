@@ -78,7 +78,11 @@ export function buildCfg(program: CompiledProgram, start: Pose): Cfg {
     if (id === undefined) {
       id = count;
       count += 1;
-      if (id >= MAX_NODES) throw new CfgError(`the spatial CFG would exceed ${MAX_NODES} nodes`);
+      if (id >= MAX_NODES) {
+        throw new CfgError(
+          `the spatial CFG would exceed ${MAX_NODES} nodes: the program reaches too many (pose, open-loop) states, usually from many loop anchors reachable in many orders. This is a compiler resource limit, not a language rule; the HIR interpreter can still run it (--engine hir)`,
+        );
+      }
       index.set(key, id);
       pending.push({ id, body, pose, anchors });
     }
