@@ -67,6 +67,11 @@ function printError(error: unknown): never {
   process.exit(1);
 }
 
+function engineOf(name: string): "vm" | "hir" {
+  if (name !== "vm" && name !== "hir") throw new Error(`unknown engine '${name}': use vm or hir`);
+  return name;
+}
+
 const cli = new Command();
 
 cli.name("y3").description("YI3ANG tooling: v2 document commands (check, ir, fmt, unpack, pack) and the v1 interpreter (validate, run, trace)").version("0.1.0");
@@ -90,11 +95,12 @@ cli
   .argument("<file>", "Path to .y3 file")
   .option("-i, --input <values>", "Space/comma separated integer input values")
   .option("--max-steps <count>", "Execution step limit (default: 10000)")
-  .action((filePath: string, options: { input?: string; maxSteps?: string }) => {
+  .option("--engine <engine>", "v2: vm (bytecode VM, default) or hir (the reference interpreter)", "vm")
+  .action((filePath: string, options: { input?: string; maxSteps?: string; engine: string }) => {
     try {
       const source = readSource(filePath);
-      if (looksLikeV2(source)) {
-        runV2(filePath, source, { maxSteps: parseMaxSteps(options.maxSteps), input: options.input, trace: false });
+      if (looksLikeV2(source) || source.startsWith("Y3BC ")) {
+        runV2(filePath, source, { maxSteps: parseMaxSteps(options.maxSteps), input: options.input, trace: false, engine: engineOf(options.engine) });
         return;
       }
       const program = parseProgram(source);
@@ -115,11 +121,12 @@ cli
   .argument("<file>", "Path to .y3 file")
   .option("-i, --input <values>", "Space/comma separated integer input values")
   .option("--max-steps <count>", "Execution step limit (default: 10000)")
-  .action((filePath: string, options: { input?: string; maxSteps?: string }) => {
+  .option("--engine <engine>", "v2: vm (bytecode VM, default) or hir (the reference interpreter)", "vm")
+  .action((filePath: string, options: { input?: string; maxSteps?: string; engine: string }) => {
     try {
       const source = readSource(filePath);
-      if (looksLikeV2(source)) {
-        runV2(filePath, source, { maxSteps: parseMaxSteps(options.maxSteps), input: options.input, trace: true });
+      if (looksLikeV2(source) || source.startsWith("Y3BC ")) {
+        runV2(filePath, source, { maxSteps: parseMaxSteps(options.maxSteps), input: options.input, trace: true, engine: engineOf(options.engine) });
         return;
       }
       const program = parseProgram(source);

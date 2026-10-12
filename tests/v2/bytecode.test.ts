@@ -42,7 +42,7 @@ describe("bytecode verifier", () => {
     withNoun.blocks.flatMap((b) => b.code).find((c) => c[0] === 24)![1] = 77; // assign
     refuse(withNoun, /noun #77 is not a noun of body 'main'/);
     const withOp = clone(base);
-    withOp.blocks[0]!.code.push([99]);
+    (withOp.blocks[0]!.code as unknown[][]).push([99]);
     refuse(withOp, /unknown opcode 99/);
   });
 
@@ -64,7 +64,7 @@ describe("bytecode verifier", () => {
     refuse(past, /a past statement speaks of now or 처음, never 끝/);
     const early = clone(base);
     const first = early.blocks[0]!;
-    first.code.unshift([4, 0, 3]); // move r0 ← r3 before r3 exists
+    (first.code as unknown[][]).unshift([4, 0, 3]); // move r0 ← r3 before r3 exists
     refuse(early, /reads r3 before it is written/);
   });
 
