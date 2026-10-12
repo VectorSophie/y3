@@ -44,3 +44,6 @@ export * from "./temporal/terms";
 export * from "./temporal/solver";
 export * from "./temporal/store";
 export * from "./compiler/cfg";
+export * from "./compiler/mir";
+export * from "./compiler/compile";
+export * from "./runtime/vm";

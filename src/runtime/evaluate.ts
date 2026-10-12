@@ -1,9 +1,9 @@
 import { callable, type Callable, type CallTypes } from "../ir/callables";
-import type { Expr, Moment, NounId, Pattern } from "../ir/hir";
+import type { CallableId, Expr, Moment, NounId, Pattern } from "../ir/hir";
 import { bool, elementsOf, float, int, sameValue, UNIT, type ConcreteValue } from "../semantics/values";
 import { RuntimeFault } from "../semantics/fault";
-import { numericType, order, type ArithOp } from "../semantics/numeric";
-import type { NumericName } from "../types/types";
+import { numericType, order, type ArithOp, type OrderOp } from "../semantics/numeric";
+import type { NumericName, Type } from "../types/types";
 import type { SymbolicTerm } from "../temporal/terms";
 
 // Evaluation of typed IR expressions. A value is concrete, or (for bigint and Text only)
@@ -63,6 +63,10 @@ export function matchPattern(pattern: Pattern, value: ConcreteValue, bound: Map<
   return go(pattern, value) ? bound : null;
 }
 
+// ---- Operations. Each is one step of evaluation on concrete values, shared by the HIR
+// interpreter (evaluate, below) and the bytecode VM (runtime/vm), which call them in the
+// same order. Checks that can FAULT happen inside them, at the same point for both.
+
 function sequence(value: ConcreteValue): readonly ConcreteValue[] {
   const elements = elementsOf(value);
   if (!elements) throw new Error("an array or slice was expected; the type checker should have caught this");
@@ -79,13 +83,80 @@ function position(value: ConcreteValue, length: number, what: "element" | "bound
   return Number(value.value);
 }
 
+export const ops = {
+  // A literal at its type: a float literal is rounded to the type's width.
+  literal: (value: ConcreteValue, type: Type): ConcreteValue =>
+    value.kind === "float" && type.kind === "prim" && type.name === "f32" ? float(value.value, 32) : value,
+  not: (v: ConcreteValue): ConcreteValue => bool(!(v.kind === "bool" && v.value)),
+  eq: (a: ConcreteValue, b: ConcreteValue): ConcreteValue => bool(sameValue(a, b)),
+  order: (op: OrderOp, a: ConcreteValue, b: ConcreteValue): ConcreteValue => bool(order(op, a, b)),
+  construct: (type: string, variant: string | null, fields: readonly ConcreteValue[]): ConcreteValue => ({ kind: "data", type, variant, fields }),
+  field: (record: ConcreteValue, index: number, name: string): ConcreteValue => {
+    const field = record.kind === "data" ? record.fields[index] : undefined;
+    if (!field) throw new Error(`no field '${name}'; the type checker should have caught this`);
+    return field;
+  },
+  // A record field write: the record is checked before the new value is evaluated.
+  checkField: (record: ConcreteValue, index: number, name: string): void => {
+    if (record.kind !== "data" || record.fields[index] === undefined) throw new Error(`no field '${name}'; the type checker should have caught this`);
+  },
+  setField: (record: ConcreteValue, index: number, value: ConcreteValue): ConcreteValue => {
+    if (record.kind !== "data") throw new Error("a record was expected; the type checker should have caught this");
+    const fields = [...record.fields];
+    fields[index] = value;
+    return { ...record, fields };
+  },
+  array: (elements: readonly ConcreteValue[]): ConcreteValue => ({ kind: "array", elements }),
+  // An element read: the position is checked once both operands are known.
+  index: (base: ConcreteValue, index: ConcreteValue): ConcreteValue => {
+    const elements = sequence(base);
+    return elements[position(index, elements.length, "element")] as ConcreteValue;
+  },
+  // An element write: the base is checked first, then the position (before the new
+  // value is evaluated), then the write.
+  checkWritable: (base: ConcreteValue): void => {
+    if (base.kind !== "array" && base.kind !== "list") throw new Error("only an array's or a list's element can be written; the type checker should have caught this");
+  },
+  writePosition: (base: ConcreteValue, index: ConcreteValue): ConcreteValue => int(BigInt(position(index, sequence(base).length, "element"))),
+  setIndex: (base: ConcreteValue, at: ConcreteValue, value: ConcreteValue): ConcreteValue => {
+    if (base.kind !== "array" && base.kind !== "list") throw new Error("only an array's or a list's element can be written");
+    const elements = [...base.elements];
+    elements[Number(at.kind === "int" ? at.value : 0n)] = value;
+    return { kind: base.kind, elements };
+  },
+  // Slice bounds are checked one at a time, as each is evaluated.
+  sliceBound: (base: ConcreteValue, bound: ConcreteValue): ConcreteValue => int(BigInt(position(bound, sequence(base).length, "bound"))),
+  slice: (base: ConcreteValue, from: ConcreteValue, to: ConcreteValue): ConcreteValue => {
+    const a = Number(from.kind === "int" ? from.value : 0n);
+    const b = Number(to.kind === "int" ? to.value : 0n);
+    if (a > b) throw new RuntimeFault(`a slice cannot start at ${a} and end at ${b}`);
+    // A view of the same storage: a slice of a slice still views the array.
+    const storage = base.kind === "slice" ? base.storage : base.kind === "array" ? base.elements : [];
+    const offset = base.kind === "slice" ? base.start : 0;
+    return { kind: "slice", storage, start: offset + a, length: b - a };
+  },
+  length: (base: ConcreteValue): ConcreteValue => int(BigInt(sequence(base).length)),
+};
+
+// A built-in call, once its arguments are evaluated: output takes its value as it is
+// (it may be symbolic); everything else needs every argument now, in order.
+export function callBuiltin(env: EvalEnv, callee: CallableId, args: readonly Value[], types: CallTypes): Value {
+  const target = callable(callee);
+  if (target.kind === "output") {
+    env.output(args[0] as Value, target.newline);
+    return concrete(UNIT);
+  }
+  // Everything else needs its arguments now: the present never waits for the future.
+  const values = args.map((arg) => env.now(arg, `'${target.namespace} ${target.name}'`));
+  return concrete(target.kind === "pure" ? target.apply(values, types) : env.effect(target, values, types));
+}
+
 export function evaluate(e: Expr, env: EvalEnv, locals: ReadonlyMap<string, ConcreteValue> = new Map()): Value {
   const sub = (x: Expr) => evaluate(x, env, locals);
   const needed = (x: Expr, purpose: string) => env.now(sub(x), purpose);
   switch (e.node) {
     case "Literal":
-      // A float literal is rounded to its type's width.
-      return concrete(e.value.kind === "float" && e.type.kind === "prim" && e.type.name === "f32" ? float(e.value.value, 32) : e.value);
+      return concrete(ops.literal(e.value, e.type));
     case "LoadNoun":
       return env.load(e.noun);
     case "LoadLocal": {
@@ -100,74 +171,49 @@ export function evaluate(e: Expr, env: EvalEnv, locals: ReadonlyMap<string, Conc
     case "Mul":
     case "Div": {
       const left = sub(e.left);
-      const op = ({ Add: "add", Sub: "sub", Mul: "mul", Div: "div" } as const)[e.node];
-      return env.arithmetic(op, numericType(e.type), left, sub(e.right));
+      return env.arithmetic(ARITH[e.node], numericType(e.type), left, sub(e.right));
     }
     case "Compare": {
       const left = needed(e.left, "this comparison");
-      return concrete(bool(order(e.op, left, needed(e.right, "this comparison"))));
+      return concrete(ops.order(e.op, left, needed(e.right, "this comparison")));
     }
     case "Eq": {
       const left = needed(e.left, "this comparison");
-      return concrete(bool(sameValue(left, needed(e.right, "this comparison"))));
+      return concrete(ops.eq(left, needed(e.right, "this comparison")));
     }
-    case "Not": {
-      const operand = needed(e.operand, "this negation");
-      return concrete(bool(!(operand.kind === "bool" && operand.value)));
-    }
-    case "Call": {
-      const target = callable(e.callee);
-      const args = e.args.map(sub);
-      if (target.kind === "output") {
-        env.output(args[0] as Value, target.newline);
-        return concrete(UNIT);
-      }
-      // Everything else needs its arguments now: the present never waits for the future.
-      const values = args.map((arg) => env.now(arg, `'${target.namespace} ${target.name}'`));
-      const types = { args: e.args.map((a) => a.type), result: e.type };
-      return concrete(target.kind === "pure" ? target.apply(values, types) : env.effect(target, values, types));
-    }
+    case "Not":
+      return concrete(ops.not(needed(e.operand, "this negation")));
+    case "Call":
+      return callBuiltin(env, e.callee, e.args.map(sub), { args: e.args.map((a) => a.type), result: e.type });
     case "Construct":
-      return concrete({ kind: "data", type: e.typeName, variant: e.variant, fields: e.args.map((arg) => needed(arg, "a data value")) });
-    case "Field": {
-      const record = needed(e.record, "a field");
-      const field = record.kind === "data" ? record.fields[e.index] : undefined;
-      if (!field) throw new Error(`no field '${e.field}'; the type checker should have caught this`);
-      return concrete(field);
-    }
+      return concrete(ops.construct(e.typeName, e.variant, e.args.map((arg) => needed(arg, "a data value"))));
+    case "Field":
+      return concrete(ops.field(needed(e.record, "a field"), e.index, e.field));
     case "SetField": {
       const record = needed(e.record, "a field");
-      if (record.kind !== "data" || record.fields[e.index] === undefined) throw new Error(`no field '${e.field}'; the type checker should have caught this`);
-      const fields = [...record.fields];
-      fields[e.index] = needed(e.value, "a data value");
-      return concrete({ ...record, fields });
+      ops.checkField(record, e.index, e.field);
+      return concrete(ops.setField(record, e.index, needed(e.value, "a data value")));
     }
     case "ArrayLiteral":
-      return concrete({ kind: "array", elements: e.elements.map((x) => needed(x, "an array")) });
+      return concrete(ops.array(e.elements.map((x) => needed(x, "an array"))));
     case "Index": {
-      const elements = sequence(needed(e.base, "an element"));
-      return concrete(elements[position(needed(e.index, "an index"), elements.length, "element")] as ConcreteValue);
+      const base = needed(e.base, "an element");
+      return concrete(ops.index(base, needed(e.index, "an index")));
     }
     case "SetIndex": {
       const base = needed(e.base, "an element");
-      if (base.kind !== "array" && base.kind !== "list") throw new Error("only an array's or a list's element can be written; the type checker should have caught this");
-      const elements = [...base.elements];
-      elements[position(needed(e.index, "an index"), elements.length, "element")] = needed(e.value, "an array");
-      return concrete({ kind: base.kind, elements });
+      ops.checkWritable(base);
+      const at = ops.writePosition(base, needed(e.index, "an index"));
+      return concrete(ops.setIndex(base, at, needed(e.value, "an array")));
     }
     case "Slice": {
       const base = needed(e.base, "a slice");
-      const length = sequence(base).length;
-      const from = position(needed(e.from, "a slice"), length, "bound");
-      const to = position(needed(e.to, "a slice"), length, "bound");
-      if (from > to) throw new RuntimeFault(`a slice cannot start at ${from} and end at ${to}`);
-      // A view of the same storage: a slice of a slice still views the array.
-      const storage = base.kind === "slice" ? base.storage : base.kind === "array" ? base.elements : [];
-      const offset = base.kind === "slice" ? base.start : 0;
-      return concrete({ kind: "slice", storage, start: offset + from, length: to - from });
+      const from = ops.sliceBound(base, needed(e.from, "a slice"));
+      const to = ops.sliceBound(base, needed(e.to, "a slice"));
+      return concrete(ops.slice(base, from, to));
     }
     case "Length":
-      return concrete(int(BigInt(sequence(needed(e.base, "a length")).length)));
+      return concrete(ops.length(needed(e.base, "a length")));
     case "Match": {
       const scrutinee = needed(e.scrutinee, "a match");
       for (const arm of e.arms) {
@@ -179,3 +225,4 @@ export function evaluate(e: Expr, env: EvalEnv, locals: ReadonlyMap<string, Conc
   }
 }
 
+export const ARITH = { Add: "add", Sub: "sub", Mul: "mul", Div: "div" } as const;

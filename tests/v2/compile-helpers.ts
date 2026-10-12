@@ -29,3 +29,26 @@ export function runHir(c: { program: CompiledProgram; manifest: Manifest }, maxS
 }
 
 export const column = (cells: string[], appendix = "") => `⟦\n${cells.map((c) => `[${c}]`).join("\n")}\n⟧\n${appendix ? `\n※\n\n${appendix}` : ""}`;
+
+import { compileToMir, executableOf, memoryHost as host2, runExecutable } from "../../src/v2";
+
+export function runVm(c: { program: CompiledProgram; manifest: Manifest }, maxSteps?: number, stdin?: string): ProgramResult {
+  const { mir, nodes } = compileToMir(c.program, c.manifest.start);
+  return runExecutable(executableOf(mir, nodes, c.manifest.start), c.program, c.manifest, { maxSteps, host: host2({ stdin, now: 42n }) });
+}
+
+// Everything observable about a run, as plain data: two engines are equivalent only if
+// these are equal, temporal causality included.
+export function observable(r: ProgramResult) {
+  const json = (v: unknown) =>
+    JSON.parse(JSON.stringify(v, (_, x) => (typeof x === "bigint" ? `${x}n` : x instanceof Map ? [...x] : x && typeof x === "object" && "layers" in x && "manifest" in x ? "<space>" : x)));
+  return json({
+    outcome: r.outcome,
+    output: r.output,
+    events: r.events,
+    values: r.values,
+    symbols: r.symbols,
+    versions: r.versions,
+    trace: r.trace,
+  });
+}
