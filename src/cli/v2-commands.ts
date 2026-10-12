@@ -3,7 +3,17 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { Command } from "commander";
 import { loadDocument } from "../container/document";
 import { compileProgram, type ModuleResolver } from "../semantics/program";
-import { runProgram } from "../runtime/interpreter";
+import { runProgram, type ProgramResult } from "../runtime/interpreter";
+import { runExecutable } from "../runtime/vm";
+import { compileToMir } from "../compiler/compile";
+import { formatCfg } from "../compiler/cfg";
+import { formatMir } from "../compiler/mir";
+import { optimizeMir } from "../compiler/optimize";
+import { BYTECODE_MAGIC, encodeBytecode, loadBytecode, moduleOf, writeArtifact, type Loaded } from "../compiler/bytecode";
+import { DEFAULT_MANIFEST, type Manifest } from "../space/manifest";
+import type { CompiledProgram } from "../ir/program";
+import { packageResolver, PackageError, writeLock } from "./packages";
+import { documentModule, documentStandardLibrary, formatDoc } from "../tools/doc";
 import { formatProgramTrace } from "../runtime/program-trace";
 import { nodeHost } from "./node-host";
 import { formatCompiledIr } from "../ir/print";
@@ -36,19 +46,23 @@ function loadOrExit(filePath: string, source = readFileSync(filePath, "utf8")) {
   return { ast: loaded.ast, space: loaded.space, manifest: loaded.manifest };
 }
 
-// Imports are paths relative to the importing file. A module is known by its path
-// relative to the working directory, which is also how its diagnostics name it.
-const fileModules: ModuleResolver = (path, from) => {
-  const full = resolve(from === null ? "." : dirname(from), path);
-  if (!existsSync(full) || !statSync(full).isFile()) return null;
-  return { path: relative(".", full), source: readFileSync(full, "utf8") };
-};
+// Imports resolve through the package resolver: local paths relative to the importing
+// file, git imports at the revision y3.lock pins (docs/v2-toolchain.md).
+function modulesFor(filePath: string, mode: "locked" | "update" = "locked") {
+  return packageResolver({ root: dirname(resolve(filePath)), mode });
+}
 
 // Loads and compiles a v2 program; prints every diagnostic and exits on errors.
-function compileOrExit(filePath: string, source?: string) {
+function compileOrExit(filePath: string, source?: string, resolver: ModuleResolver = modulesFor(filePath).resolve) {
   const { ast, space, manifest } = loadOrExit(filePath, source);
   if (!space || !manifest) process.exit(1);
-  const compiled = compileProgram(ast, space, { path: relative(".", resolve(filePath)), resolve: fileModules });
+  let compiled: ReturnType<typeof compileProgram>;
+  try {
+    compiled = compileProgram(ast, space, { path: relative(".", resolve(filePath)), resolve: resolver });
+  } catch (error) {
+    if (error instanceof PackageError) fatal(`${filePath}: ${error.message}`);
+    throw error;
+  }
   for (const diagnostic of compiled.diagnostics) {
     console.error(formatDiagnostic(diagnostic, filePath));
   }
@@ -56,14 +70,41 @@ function compileOrExit(filePath: string, source?: string) {
   return { program: compiled.program, manifest };
 }
 
-export function runV2(filePath: string, source: string, options: { maxSteps?: number; input?: string; trace: boolean }): void {
-  const { program, manifest } = compileOrExit(filePath, source);
-  if (program.space.layers.length === 0) {
-    fatal(`${filePath} is a library module: it has callable planes and types but no volume to run`);
-  }
+export type Engine = "vm" | "hir";
+
+// Compiles a program to an executable: spatial CFG, MIR (optimized), and back through the
+// bytecode encoding, so `y3 run` executes exactly what `y3 build` would write.
+function executableFor(program: CompiledProgram, manifest: Manifest, module: string): Loaded {
+  const { mir, nodes } = compileToMir(program, manifest.start);
+  return loadBytecode(encodeBytecode(optimizeMir(mir).mir, nodes, program, { module, maxSteps: manifest.maxSteps, start: manifest.start }));
+}
+
+export function runV2(filePath: string, source: string, options: { maxSteps?: number; input?: string; trace: boolean; engine?: Engine }): void {
   // Output is written as the program commits it; a trace prints the run instead.
   const host = nodeHost({ stdin: options.input, write: options.trace ? () => {} : undefined });
-  const result = runProgram(program, manifest, { maxSteps: options.maxSteps, host });
+  let result: ProgramResult;
+  if (source.startsWith(`${BYTECODE_MAGIC} `)) {
+    if (options.engine === "hir") fatal(`${filePath} is bytecode: only the VM runs it`);
+    let loaded: Loaded;
+    try {
+      loaded = moduleOf(source);
+    } catch (error) {
+      fatal(`${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const manifest = { ...DEFAULT_MANIFEST, maxSteps: loaded.maxSteps };
+    result = runExecutable(loaded.executable, loaded.program, manifest, { maxSteps: options.maxSteps, host });
+  } else {
+    const { program, manifest } = compileOrExit(filePath, source);
+    if (program.space.layers.length === 0) {
+      fatal(`${filePath} is a library module: it has callable planes and types but no volume to run`);
+    }
+    if (options.engine === "hir") {
+      result = runProgram(program, manifest, { maxSteps: options.maxSteps, host });
+    } else {
+      const loaded = executableFor(program, manifest, manifest.name ?? basename(filePath, ".y3"));
+      result = runExecutable(loaded.executable, loaded.program, manifest, { maxSteps: options.maxSteps, host });
+    }
+  }
   if (options.trace) {
     process.stdout.write(formatProgramTrace(result));
   } else if (result.outcome.status !== "HALT") {
@@ -88,7 +129,119 @@ function readTree(root: string): FileMap {
   return files;
 }
 
+// Every .y3 file under a directory, skipping caches and dependencies.
+function findSources(path: string): string[] {
+  if (statSync(path).isFile()) return [path];
+  return readdirSync(path)
+    .filter((e) => !e.startsWith(".") && e !== "node_modules")
+    .sort()
+    .flatMap((e) => {
+      const full = join(path, e);
+      return statSync(full).isDirectory() ? findSources(full) : e.endsWith(".y3") ? [full] : [];
+    });
+}
+
 export function registerV2Commands(cli: Command): void {
+  cli
+    .command("build")
+    .description("compile a program to a portable bytecode artifact (.y3b)")
+    .argument("<file>", "path to a .y3 document")
+    .option("-o, --out <file>", "output file (default: the file name with .y3b)")
+    .action((filePath: string, options: { out?: string }) => {
+      const { program, manifest } = compileOrExit(filePath);
+      if (program.space.layers.length === 0) fatal(`${filePath} is a library module: it has no volume to build into a program`);
+      const { mir, nodes } = compileToMir(program, manifest.start);
+      const module = encodeBytecode(optimizeMir(mir).mir, nodes, program, { module: manifest.name ?? basename(filePath, ".y3"), maxSteps: manifest.maxSteps, start: manifest.start });
+      loadBytecode(module); // never write what the VM would refuse
+      const out = options.out ?? join(dirname(filePath), `${basename(filePath, ".y3")}.y3b`);
+      writeFileSync(out, writeArtifact(module));
+      console.log(`built ${out}`);
+    });
+
+  for (const [name, description] of [
+    ["cfg", "print a program's spatial control-flow graph"],
+    ["mir", "print a program's MIR (add --optimized for what the VM runs)"],
+    ["bytecode", "print a program's bytecode artifact"],
+  ] as const) {
+    cli
+      .command(name)
+      .description(description)
+      .argument("<file>", "path to a .y3 document")
+      .option("--optimized", "after optimization")
+      .action((filePath: string, options: { optimized?: boolean }) => {
+        const { program, manifest } = compileOrExit(filePath);
+        const { cfg, mir, nodes } = compileToMir(program, manifest.start);
+        const shown = options.optimized || name === "bytecode" ? optimizeMir(mir).mir : mir;
+        if (name === "cfg") process.stdout.write(formatCfg(cfg));
+        else if (name === "mir") process.stdout.write(formatMir(shown, (n) => (nodes[n.id]?.sentence ? `[${nodes[n.id]?.sentence}]` : "[ ]")));
+        else process.stdout.write(writeArtifact(encodeBytecode(shown, nodes, program, { module: manifest.name ?? basename(filePath, ".y3"), maxSteps: manifest.maxSteps, start: manifest.start })));
+      });
+  }
+
+  cli
+    .command("test")
+    .description("run every program with a [test] table in its manifest and check its output and outcome")
+    .argument("[paths...]", "files or directories (default: .)")
+    .option("--engine <engine>", "vm (default) or hir", "vm")
+    .action((paths: string[], options: { engine: string }) => {
+      const files = (paths.length ? paths : ["."]).flatMap(findSources);
+      let passed = 0;
+      let failed = 0;
+      for (const file of files) {
+        const source = readFileSync(file, "utf8");
+        const loaded = loadDocument(source);
+        const test = loaded.manifest?.test;
+        if (!test) continue;
+        const { program, manifest } = compileOrExit(file, source);
+        const host = nodeHost({ stdin: test.stdin, write: () => {} });
+        const result =
+          options.engine === "hir" ? runProgram(program, manifest, { host }) : (() => {
+            const l = executableFor(program, manifest, manifest.name ?? basename(file, ".y3"));
+            return runExecutable(l.executable, l.program, manifest, { host });
+          })();
+        const problems: string[] = [];
+        if (result.outcome.status !== test.status) problems.push(`outcome ${result.outcome.status}, expected ${test.status}`);
+        if (test.output && JSON.stringify(result.output) !== JSON.stringify(test.output)) problems.push(`output ${JSON.stringify(result.output)}, expected ${JSON.stringify(test.output)}`);
+        if (problems.length === 0) {
+          passed += 1;
+          console.log(`ok   ${file}`);
+        } else {
+          failed += 1;
+          console.log(`FAIL ${file}: ${problems.join("; ")}`);
+        }
+      }
+      console.log(`${passed} passed, ${failed} failed`);
+      if (failed > 0) process.exitCode = 1;
+    });
+
+  cli
+    .command("doc")
+    .description("print a module's documentation: types, callable planes, named planes, doc comments")
+    .argument("[file]", "path to a .y3 document")
+    .option("--json", "machine-readable output")
+    .option("--std", "the standard library instead")
+    .action((filePath: string | undefined, options: { json?: boolean; std?: boolean }) => {
+      if (options.std || !filePath) {
+        const entries = documentStandardLibrary();
+        process.stdout.write(options.json ? `${JSON.stringify(entries, null, 2)}\n` : `${entries.map((e) => `${e.namespace} ${e.name}  ${e.signature}  (${e.id}, ${e.kind})`).join("\n")}\n`);
+        return;
+      }
+      const { ast } = loadOrExit(filePath);
+      const model = documentModule(ast, basename(filePath, ".y3"));
+      process.stdout.write(options.json ? `${JSON.stringify(model, null, 2)}\n` : formatDoc(model));
+    });
+
+  cli
+    .command("lock")
+    .description("resolve git imports to revisions and write y3.lock")
+    .argument("<file>", "path to a .y3 document")
+    .action((filePath: string) => {
+      const packages = modulesFor(filePath, "update");
+      compileOrExit(filePath, undefined, packages.resolve);
+      writeLock(dirname(resolve(filePath)), packages.lock());
+      console.log(`locked ${packages.lock().packages.length} package(s)`);
+    });
+
   cli
     .command("check")
     .description("check a v2 document: structure, manifest, every sentence, and types")

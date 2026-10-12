@@ -17,6 +17,8 @@ export type Manifest = {
   // [imports] alias = "path.y3": modules this one uses, by the namespace it calls them.
   // Paths live here so that sentences never contain one.
   readonly imports: ReadonlyMap<string, string>;
+  // [test]: what `y3 test` expects of this program. null when it is not a test.
+  readonly test: TestExpectation | null;
 };
 
 export const DEFAULT_MAX_STEPS = 10_000;
@@ -26,6 +28,7 @@ export const DEFAULT_MANIFEST: Manifest = {
   start: { position: { x: 0, y: 0, z: 0 }, orientation: { forward: "south", up: "up" } },
   maxSteps: DEFAULT_MAX_STEPS,
   imports: new Map(),
+  test: null,
 };
 
 export const MANIFEST_CODES = {
@@ -35,7 +38,16 @@ export const MANIFEST_CODES = {
   START_IN_VOID: "Y3M004",
 } as const;
 
-const KNOWN_TOP_LEVEL = new Set(["name", "y3", "start", "limits", "experimental", "imports"]);
+const KNOWN_TOP_LEVEL = new Set(["name", "y3", "start", "limits", "experimental", "imports", "test"]);
+
+export type TestExpectation = { readonly output: readonly string[] | null; readonly status: string; readonly stdin: string };
+
+// A git import, { git = "url", ref = "main", path = "lib.y3" }, as the import string the
+// package resolver understands: "git+<url>?ref=<ref>#<path>". The language itself never
+// reads it: module resolution is the toolchain's business.
+export function gitImport(url: string, ref: string, path: string): string {
+  return `git+${url}?ref=${encodeURIComponent(ref)}#${path}`;
+}
 const KNOWN_START = new Set(["plane", "cell", "facing", "up"]);
 const KNOWN_LIMITS = new Set(["steps", "future-forks"]);
 
@@ -147,17 +159,34 @@ export function interpretManifest(raw: string | null, span: Span = WHOLE_FILE): 
     if (!isRecord(rawImports)) {
       error("[imports] must be a table of alias = \"path\"");
     } else {
-      for (const [alias, path] of Object.entries(rawImports)) {
-        if (typeof path !== "string") error(`imports.${alias} must be a path string`);
-        else imports.set(alias, path);
+      for (const [alias, spec] of Object.entries(rawImports)) {
+        if (typeof spec === "string") imports.set(alias, spec);
+        else if (isRecord(spec) && typeof spec["git"] === "string" && typeof spec["path"] === "string" && (spec["ref"] === undefined || typeof spec["ref"] === "string")) {
+          imports.set(alias, gitImport(spec["git"], (spec["ref"] as string | undefined) ?? "HEAD", spec["path"]));
+        } else error(`imports.${alias} must be a path string, or { git = "url", ref = "branch or tag", path = "file.y3" }`);
       }
+    }
+  }
+
+  let test: TestExpectation | null = null;
+  const rawTest = table["test"];
+  if (rawTest !== undefined) {
+    if (!isRecord(rawTest)) error("[test] must be a table");
+    else {
+      const output = rawTest["output"];
+      const status = rawTest["status"] ?? "HALT";
+      const stdin = rawTest["stdin"] ?? "";
+      if (output !== undefined && !(Array.isArray(output) && output.every((x) => typeof x === "string"))) error("test.output must be a list of lines");
+      else if (typeof status !== "string") error("test.status must be an outcome such as \"HALT\"");
+      else if (typeof stdin !== "string") error("test.stdin must be text");
+      else test = { output: (output as string[] | undefined) ?? null, status, stdin };
     }
   }
 
   if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
     return { manifest: null, diagnostics };
   }
-  return { manifest: { name, start: { position, orientation: { forward, up } }, maxSteps, imports }, diagnostics };
+  return { manifest: { name, start: { position, orientation: { forward, up } }, maxSteps, imports, test }, diagnostics };
 }
 
 // The start pose must be on an authored cell; starting in VOID is a document error.

@@ -1,6 +1,9 @@
 import type { Comment, DeclarationAst, DefinitionAst, DocumentAst, InlinePlaneAst, PlaneRefAst } from "../language/ast";
 import { APPENDIX_STYLE, planeStyle, type PlaneStyle, type Projection } from "./projection";
 import { displayWidth } from "./width";
+import { canonicalCell, canonicalDeclaration, canonicalSignature } from "./canonical";
+
+export { canonicalSignature };
 
 // Canonical text for a document. Formatting changes only what carries no meaning:
 // whitespace, and the order of the ※ section. parse(format(parse(s))) equals
@@ -10,7 +13,7 @@ import { displayWidth } from "./width";
 export type FormatOptions = { projection?: Projection };
 
 function renderCell(text: string | null): string {
-  return `[${text ?? " "}]`;
+  return `[${text === null ? " " : canonicalCell(text)}]`;
 }
 
 function renderComments(comments: readonly Comment[], indent: string): string[] {
@@ -88,11 +91,6 @@ export function canonicalizeDocument(ast: DocumentAst): DocumentAst {
   };
 }
 
-// A signature's arrow is always written '→'.
-export function canonicalSignature(signature: string): string {
-  return signature.replace(/\s*->\s*/u, " → ");
-}
-
 // The opening line of a named plane: ':name: ⟦', or ':name: (signature) ⟦'.
 export function definitionHead(definition: Pick<DefinitionAst, "name" | "signature">): string {
   return definition.signature === null ? `:${definition.name}:` : `:${definition.name}: ${canonicalSignature(definition.signature)}`;
@@ -115,7 +113,7 @@ export function formatDocument(source: DocumentAst, options: FormatOptions = {})
   if (ast.appendix) {
     blocks.push([...renderComments(ast.appendix.comments, ""), "※"]);
     if (ast.appendix.declarations.length > 0) {
-      blocks.push(ast.appendix.declarations.flatMap((declaration) => [...renderComments(declaration.comments, ""), declaration.text]));
+      blocks.push(ast.appendix.declarations.flatMap((declaration) => [...renderComments(declaration.comments, ""), canonicalDeclaration(declaration.text)]));
     }
     for (const definition of ast.appendix.definitions) {
       const [open, ...rest] = renderPlane(definition.plane, APPENDIX_STYLE);

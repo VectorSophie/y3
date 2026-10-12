@@ -160,6 +160,16 @@ the call returns: temporal identity is not tied to a frame.
 
 Temporal values are `bigint` or `Text`, the integers the solver actually reasons about.
 
+**M8** adds a compiler boundary under the language (`docs/v2-compiler-pipeline.md`,
+`docs/v2-bytecode.md`, `docs/v2-toolchain.md`). Typed HIR is compiled into a spatial
+CFG over full 3D poses, then into MIR and versioned bytecode, which a VM runs on the same
+runtime core as the reference interpreter:
+
+```
+y3 check · fmt · build · run [--engine vm|hir] · trace · test · doc · lock · ir · cfg · mir · bytecode
+```
+
+
 ```
 ⟦
 [이름은 표준 줄읽기:]

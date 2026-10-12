@@ -1,650 +1,101 @@
-import type { Coordinate, Manifest, Pose } from "../space/manifest";
-import type { EffectContext, HostEvent } from "../ir/callables";
-import { memoryHost, type Host } from "../stdlib/host";
-import type { CallableId, Expr, Moment, NounId, Stmt } from "../ir/hir";
-import { coordinateKey, type Body, type CompiledProgram } from "../ir/program";
-import { renderValue, sameValue, showValue, UNIT, type ConcreteValue } from "../semantics/values";
-import { TemporalStore, type Resolution, type SymbolInfo } from "../temporal/store";
-import { carriesCause, literal, symbolsOf, TermError, type SymbolicTerm } from "../temporal/terms";
-import { concrete, evaluate, RuntimeFault, type EvalEnv, type Value } from "./evaluate";
+import type { Manifest, Pose } from "../space/manifest";
+import type { Expr, Stmt } from "../ir/hir";
+import { coordinateKey, type CompiledProgram } from "../ir/program";
+import { createRuntime, CALL_ENTRY, Stopped, type ProgramResult, type ProgramTraceEntry, type RunOptions } from "./core";
+import { evaluate, RuntimeFault } from "./evaluate";
 import type { DecodeResult, Instruction } from "./instructions";
 import { createMachine, step } from "./machine";
-import { arith, order, type OrderOp } from "../semantics/numeric";
 import { nextPose } from "./movement";
-import type { ProgramOutcome, TemporalStatus } from "./program-outcome";
-import type { TraceEntry } from "./trace";
+import type { ProgramOutcome } from "./program-outcome";
 
-// The interpreter. It runs the typed IR, never the Korean that produced it. Present
-// tense executes on concrete values (M2). Past and future tense add constraints to the
-// temporal store, which resolves a symbol only when the constraints leave exactly one
-// value (M3). Temporal cycles (M4): channels carry a value from later to earlier, fixed
-// points equate an iteration's end with its start, and time anchors read a noun at
-// 처음 or 끝, all as linear equalities for the same solver. The interpreter never sees
-// Korean, the machine never sees values, and the store never decides control flow.
-//
-// A noun's history is a chain of semantic versions (값₀, 값₁, …), SSA style: each store,
-// declaration or receive defines a new version, and reads use the current one. A
-// 처음 snapshot is a set of versions, not a copy of the machine.
+export * from "./core";
 
-// A noun's binding: concrete, or a symbolic term. Whether it carries an operational
-// cause is read from its normal form (carriesCause), never from the syntax that built it.
-type Binding = Value;
+// The HIR interpreter: the reference engine. It finds control flow the way the language
+// defines it, by moving a pointer through space (runtime/machine), and evaluates HIR
+// expression trees (runtime/evaluate). Everything that executing a statement does is a
+// runtime-core service (runtime/core), shared with the bytecode VM.
 
-type Version = {
-  readonly noun: NounId;
-  readonly index: number; // 값₀, 값₁, …
-  readonly binding: Binding;
-  readonly definedAt: number; // step
-  readonly uses: number[]; // steps that read this version
-};
-
-type Promise = { readonly noun: NounId; readonly term: SymbolicTerm; readonly madeAt: number; readonly sentence: string };
-type EndRead = { readonly noun: NounId; readonly symbol: SymbolicTerm; readonly madeAt: number; readonly sentence: string };
-type FixedPoint = { readonly madeAt: number; readonly sentence: string };
-
-// One iteration of a loop, or a whole activation (the run, or one call of a callable
-// plane). It remembers how it began, what it wrote, and what must be closed when it ends.
-type Scope = {
-  readonly anchor: Pose | null; // null for the run or a call
-  iteration: number;
-  start: Map<NounId, Version>; // 처음: the versions current when this iteration began
-  written: Set<NounId>;
-  promises: Promise[];
-  endReads: EndRead[]; // 끝의 N, read before the end
-  fixed: FixedPoint[]; // 처음은 끝이었다
-};
-
-type Slot = { readonly id: string; readonly noun: NounId; readonly symbol: SymbolicTerm; readonly openedAt: number };
-
-// One activation of a body: the main volume (the run), or one call of a callable plane.
-// Its nouns, cycles and channels are its own; a lexical scope is a body, and a frame is
-// one run of it. Temporal symbols are not frame-local: they live in the store, so a
-// value can leave a call still symbolic and be determined after the frame is gone.
-type Frame = {
-  readonly activation: number; // 0 for the run, then 1, 2, … for each call
-  readonly label: string | null; // "제곱#2"; null for the main volume
-  readonly body: Body;
-  readonly current: Map<NounId, Version>;
-  readonly root: Scope; // the run, or the call: obligations made with no open cycle fall due when it ends
-  readonly cycles: Scope[];
-  readonly slots: Map<NounId, Slot[]>; // per noun, most recent last
-  readonly returnTo: Pose | null; // the call cell's pose in the caller: position and full orientation
-  readonly results: readonly NounId[]; // the caller's nouns that receive the returned values
-};
-// One write to standard output. Writes commit to the host in program order; a write
-// whose value is still symbolic is held, and holds every write after it, until the
-// value is determined. A held write never becomes a different text: it is written
-// once, when known (or as "?" if the run ends first).
-type Write = { text: string | null; term: SymbolicTerm | null; heldSince: number | null; readonly newline: boolean };
-
-export type Effect =
-  // ordinary present execution
-  | { readonly kind: "set"; readonly name: string; readonly value: ConcreteValue }
-  | { readonly kind: "say"; readonly line: string }
-  | { readonly kind: "test"; readonly left: ConcreteValue; readonly right: ConcreteValue; readonly negated: boolean; readonly holds: boolean }
-  | { readonly kind: "condition"; readonly holds: boolean } // a Bool condition that is not a comparison
-  | { readonly kind: "order"; readonly op: OrderOp; readonly left: ConcreteValue; readonly right: ConcreteValue; readonly holds: boolean }
-  | { readonly kind: "anchor"; readonly at: Coordinate; readonly iteration: number }
-  | { readonly kind: "back"; readonly to: Coordinate }
-  | { readonly kind: "leave"; readonly anchor: Coordinate }
-  | { readonly kind: "end" }
-  | { readonly kind: "write"; readonly text: string } // output without a line break
-  | { readonly kind: "effect"; readonly source: string; readonly value: string } // an external effect, committed
-  // calls
-  | { readonly kind: "call"; readonly frame: string; readonly args: readonly string[] }
-  | { readonly kind: "return"; readonly frame: string; readonly values: readonly string[] }
-  // present execution on symbolic values
-  | { readonly kind: "declare"; readonly name: string; readonly symbol: string }
-  | { readonly kind: "bind"; readonly name: string; readonly term: string }
-  | { readonly kind: "hold"; readonly term: string }
-  // temporal cycles
-  | { readonly kind: "open"; readonly slot: string; readonly name: string; readonly symbol: string }
-  | { readonly kind: "close"; readonly slot: string; readonly sent: string; readonly openedAt: number; readonly selfLoop: boolean }
-  | { readonly kind: "unanswered"; readonly slot: string; readonly symbol: string }
-  | { readonly kind: "endread"; readonly name: string; readonly symbol: string; readonly due: string }
-  | { readonly kind: "fixed"; readonly due: string }
-  // constraints
-  | { readonly kind: "constrain"; readonly equation: string; readonly source: string }
-  | { readonly kind: "promise"; readonly name: string; readonly term: string; readonly due: string }
-  // resolution
-  | {
-      readonly kind: "resolve";
-      readonly symbol: string;
-      readonly value: ConcreteValue;
-      readonly born: number;
-      readonly fills: readonly number[];
-      readonly selfLoop: string | null;
-    }
-  | { readonly kind: "flush"; readonly line: string; readonly heldSince: number }
-  // how time can stop a run
-  | { readonly kind: "contradiction"; readonly reason: string }
-  | { readonly kind: "unresolved"; readonly symbols: readonly string[] }
-  | { readonly kind: "ambiguous"; readonly symbols: readonly string[] };
-
-// `frame` names the activation the cell ran in ("제곱#2"); null for the main volume.
-export type ProgramTraceEntry = TraceEntry & { readonly effects: readonly Effect[]; readonly frame: string | null };
-
-export type SymbolSummary = {
-  readonly label: string;
-  readonly noun: string;
-  readonly born: number;
-  readonly state: "declared" | "constrained" | "resolved";
-  readonly value: string | null;
-  readonly resolvedAt: number | null;
-  readonly loop: string | null; // the edge whose cycle closed on this symbol, if any
-  readonly mark: "SELF_CAUSED" | "RETRO" | null;
-};
-
-// One semantic version of a noun and its def-use record.
-export type VersionSummary = {
-  readonly frame?: string; // the call that defined it; absent for the main volume
-  readonly noun: string;
-  readonly index: number;
-  readonly definedAt: number;
-  readonly value: string; // as it stands at the end of the run
-  readonly uses: readonly number[];
-};
-
-export type ProgramResult = {
-  readonly outcome: ProgramOutcome;
-  readonly output: readonly string[]; // standard output as lines; "?" for a value with no unique value
-  readonly events: readonly HostEvent[]; // grounded inputs (stdin, clocks, files), in order, for replay
-  readonly values: ReadonlyMap<string, ConcreteValue>; // nouns with concrete (or resolved) values
-  readonly symbols: readonly SymbolSummary[];
-  readonly versions: readonly VersionSummary[];
-  readonly trace: readonly ProgramTraceEntry[];
-};
-
-class Stopped extends Error {} // a temporal stop (UNRESOLVED, PARADOX) mid-statement
-
-function sameCoordinate(a: Coordinate, b: Coordinate): boolean {
-  return a.x === b.x && a.y === b.y && a.z === b.z;
-}
-
-function at(c: Coordinate): string {
-  return `(${c.x},${c.y},${c.z})`;
-}
-
-// Where a call starts: the callable plane's first cell, facing 남, up 위.
-const CALL_ENTRY: Pose = { position: { x: 0, y: 0, z: 0 }, orientation: { forward: "south", up: "up" } };
-
-export type RunOptions = { readonly maxSteps?: number; readonly host?: Host };
+const forward: Instruction = { op: "nop" };
 
 export function runProgram(program: CompiledProgram, manifest: Manifest, options: RunOptions = {}): ProgramResult {
-  const store = new TemporalStore();
-  const bodies = [program, ...program.procedures.values()];
-  const names = new Map(bodies.flatMap((body) => body.nouns.map((noun) => [noun.id, noun.name] as const)));
-  const nameOf = (id: NounId) => names.get(id) ?? `#${id}`;
-  const history: (Version & { readonly frame: string | null })[] = [];
-  const writes: Write[] = [];
-  let committed = 0; // writes [0, committed) have reached the host
-  const host = options.host ?? memoryHost();
-  const events: HostEvent[] = [];
-  const effectContext: EffectContext = { host, files: new Map() };
-  // Commits every write up to the first one whose value is not yet known.
-  const commit = (all = false) => {
-    while (committed < writes.length) {
-      const w = writes[committed] as Write;
-      if (w.text === null && !all) return;
-      const text = (w.text ?? "?") + (w.newline ? "\n" : "");
-      host.write(text);
-      events.push({ step: now, source: "std.io.stdout", value: JSON.stringify(text) });
-      committed += 1;
-    }
-  };
-  const newScope = (): Scope => ({ anchor: null, iteration: 1, start: new Map(), written: new Set(), promises: [], endReads: [], fixed: [] });
-  const main: Frame = { activation: 0, label: null, body: program, current: new Map(), root: newScope(), cycles: [], slots: new Map(), returnTo: null, results: [] };
-  const run = main.root;
-  const frames: Frame[] = [main];
-  let activations = 0;
-  // The innermost frame's state, rebound on every call and return.
-  let frame = main;
-  let current = main.current;
-  let cycles = main.cycles;
-  let slots = main.slots;
-  const enter = (f: Frame) => {
-    frame = f;
-    current = f.current;
-    cycles = f.cycles;
-    slots = f.slots;
-  };
-  let slotCount = 0;
-  let effects: Effect[] = [];
-  let now = 0; // the step being executed
-  let sentence = "";
-  let stop: { status: TemporalStatus; message: string } | null = null;
-
-  const halt = (status: TemporalStatus, message: string) => {
-    if (!stop) stop = { status, message };
-  };
-
-  const scope = (): Scope => cycles[cycles.length - 1] ?? frame.root;
-  const dueLabel = (s: Scope) =>
-    s.anchor ? `end of 처음 ${at(s.anchor.position)} #${s.iteration}` : frame.label === null ? "end of run" : `end of call ${frame.label}`;
-
-  // A binding, made concrete whenever the store can justify it.
-  const settle = (binding: Binding): Binding => {
-    if (binding.kind === "concrete") return binding;
-    const value = store.resolve(binding.term);
-    return value ? concrete(value) : binding;
-  };
-  const describe = (binding: Binding): string => {
-    const settled = settle(binding);
-    return settled.kind === "concrete" ? renderValue(settled.value) : store.format(settled.term);
-  };
-  // As a trace shows it: text quoted.
-  const show = (binding: Binding): string => {
-    const settled = settle(binding);
-    return settled.kind === "concrete" ? showValue(settled.value) : store.format(settled.term);
-  };
-  const termOf = (binding: Binding): SymbolicTerm => (binding.kind === "concrete" ? literal(binding.value) : binding.term);
-  const pendingLabels = (term: SymbolicTerm) => store.pending(term).map((info) => info.label);
-
-  // A noun's current version, keeping its symbolic identity even when resolved.
-  const version = (noun: NounId): Version => {
-    const found = current.get(noun);
-    if (!found) throw new RuntimeFault(`'${nameOf(noun)}' has no value or symbol yet`);
-    return found;
-  };
-  // Every read of a version is a use, whether the present computes with it or a
-  // constraint (past, promise, send, 처음, 끝, fixed point) speaks about it.
-  const use = (v: Version): Version => {
-    if (v.uses[v.uses.length - 1] !== now) v.uses.push(now);
-    return v;
-  };
-  const recorded = (noun: NounId): Binding => use(version(noun)).binding;
-  const bound = (noun: NounId): Binding => settle(recorded(noun));
-
-  // A new version of the noun.
-  const define = (noun: NounId, binding: Binding) => {
-    const previous = current.get(noun);
-    const next: Version = { noun, index: previous ? previous.index + 1 : 0, binding, definedAt: now, uses: [] };
-    current.set(noun, next);
-    history.push({ ...next, frame: frame.label, uses: next.uses });
-    frame.root.written.add(noun);
-    for (const cycle of cycles) cycle.written.add(noun);
-  };
-
-  const atStart = (noun: NounId): Binding => {
-    const s = scope();
-    if (!s.anchor) throw new RuntimeFault(`'처음의 ${nameOf(noun)}' needs an open '여기가 처음이다'`);
-    const v = s.start.get(noun);
-    if (!v) throw new RuntimeFault(`'${nameOf(noun)}' had no value at 처음 ${at(s.anchor.position)}`);
-    return use(v).binding;
-  };
-
-  // 끝의 N: a value from the end of the iteration, carried back as a fresh symbol that
-  // the end will settle.
-  const fromEnd = (noun: NounId): Binding => {
-    const s = scope();
-    const symbol = store.declare(nameOf(noun), now, "끝");
-    s.endReads.push({ noun, symbol, madeAt: now, sentence });
-    effects.push({ kind: "endread", name: nameOf(noun), symbol: store.format(symbol), due: dueLabel(s) });
-    return { kind: "symbolic", term: symbol };
-  };
-
-  const assign = (noun: NounId, binding: Binding) => {
-    const settled = settle(binding);
-    define(noun, settled);
-    if (settled.kind === "concrete") {
-      effects.push({ kind: "set", name: nameOf(noun), value: settled.value });
-    } else {
-      store.noteUse(settled.term, now);
-      effects.push({ kind: "bind", name: nameOf(noun), term: store.format(settled.term) });
-    }
-  };
-
-  const flushHeld = () => {
-    for (const line of writes) {
-      if (line.text !== null || !line.term) continue;
-      const value = store.resolve(line.term);
-      if (!value) continue;
-      line.text = renderValue(value);
-      effects.push({ kind: "flush", line: line.text, heldSince: line.heldSince ?? now });
-    }
-    commit();
-  };
-
-  const recordResolutions = (resolutions: Resolution[]) => {
-    for (const resolution of resolutions) {
-      effects.push({
-        kind: "resolve",
-        symbol: resolution.symbol.label,
-        value: resolution.value,
-        born: resolution.symbol.born,
-        fills: resolution.fills,
-        selfLoop: resolution.symbol.selfLoop,
-      });
-    }
-    if (resolutions.length > 0) flushHeld();
-  };
-
-  // Adds left = right as a constraint and reports what it settles.
-  const constrain = (left: SymbolicTerm, right: SymbolicTerm, source: string, statement: string) => {
-    effects.push({ kind: "constrain", equation: `${store.format(left)} = ${store.format(right)}`, source });
-    const result = store.equate(left, right, now);
-    if (result.kind === "contradiction") {
-      effects.push({ kind: "contradiction", reason: result.reason });
-      halt("PARADOX", `[${statement}] cannot hold: ${result.reason}`);
-      return;
-    }
-    recordResolutions(result.resolutions);
-  };
-
-  // One rule for every cycle edge (channel, 끝의 N, fixed point): the edge equates an
-  // origin with what came back to it. When neither side carries an external cause and
-  // the returned value contains the origin's own symbols, the cycle closes on those
-  // symbols. Whether it also determines them is left to the solver.
-  const noteLoop = (origin: SymbolicTerm, returned: SymbolicTerm, via: string): boolean => {
-    if (carriesCause(origin) || carriesCause(returned)) return false;
-    const back = new Set(symbolsOf(returned));
-    const closed = symbolsOf(origin).filter((id) => back.has(id));
-    for (const id of closed) store.info(id).selfLoop ??= via;
-    return closed.length > 0;
-  };
-
-  // Everything that falls due when an iteration (or the run) ends.
-  const endIteration = (ending: Scope) => {
-    for (const promise of ending.promises.splice(0)) {
-      if (stop) return;
-      const v = current.get(promise.noun);
-      if (!v) throw new RuntimeFault(`'${nameOf(promise.noun)}' was promised a value but has none when the promise falls due`);
-      constrain(termOf(use(v).binding), promise.term, `promised at t${promise.madeAt}`, promise.sentence);
-    }
-    for (const read of ending.endReads.splice(0)) {
-      if (stop) return;
-      const v = current.get(read.noun);
-      if (!v) throw new RuntimeFault(`'끝의 ${nameOf(read.noun)}' was read, but '${nameOf(read.noun)}' has no value at the end`);
-      noteLoop(read.symbol, termOf(use(v).binding), `끝의 ${nameOf(read.noun)}`);
-      constrain(read.symbol, termOf(v.binding), `끝의 ${nameOf(read.noun)} from t${read.madeAt}`, read.sentence);
-    }
-    for (const fixed of ending.fixed.splice(0)) {
-      const written = [...ending.written].sort((a, b) => (nameOf(a) < nameOf(b) ? -1 : nameOf(a) > nameOf(b) ? 1 : 0));
-      for (const noun of written) {
-        if (stop) return;
-        const before = ending.start.get(noun);
-        const after = current.get(noun);
-        if (!before || !after || before === after) continue; // introduced during the iteration, or untouched
-        use(before);
-        use(after);
-        noteLoop(termOf(before.binding), termOf(after.binding), `fixed point at t${fixed.madeAt}`);
-        constrain(termOf(before.binding), termOf(after.binding), `처음은 끝이었다 at t${fixed.madeAt}`, fixed.sentence);
-      }
-    }
-  };
-
-  const beginIteration = (s: Scope) => {
-    s.start = new Map(current);
-    s.written = new Set();
-  };
-
-  const leaveInnermost = () => {
-    const cycle = cycles[cycles.length - 1];
-    if (!cycle) return;
-    endIteration(cycle);
-    cycles.pop();
-    effects.push({ kind: "leave", anchor: (cycle.anchor as Pose).position });
-  };
-
-  // A value the present needs now. An open symbol cannot be waited for: space never
-  // waits for time, so the run stops here, UNRESOLVED.
-  const needNow = (values: readonly Value[], purpose: string): ConcreteValue[] => {
-    const open = [...new Set(values.flatMap((v) => (v.kind === "symbolic" ? pendingLabels(v.term) : [])))];
-    if (open.length > 0) {
-      effects.push({ kind: "unresolved", symbols: open });
-      halt("UNRESOLVED", `${purpose} needs ${open.join(", ")}, which only the future could decide`);
-      throw new Stopped();
-    }
-    return values.map((v) => {
-      const settled = settle(v);
-      if (settled.kind !== "concrete") throw new Error("a settled value with no open symbols must be concrete");
-      return settled.value;
-    });
-  };
-
-  const env: EvalEnv = {
-    load: (noun) => bound(noun),
-    anchor: (noun: NounId, moment: Moment) => (moment === "start" ? settle(atStart(noun)) : fromEnd(noun)),
-    arithmetic: (op, type, left, right) => {
-      if (left.kind === "concrete" && right.kind === "concrete") return concrete(arith(op, type, left.value, right.value));
-      // Only bigint is temporal (the solver's integers are unbounded), and time solves
-      // straight lines: a symbol may be added or subtracted, nothing more.
-      if (type !== "bigint") throw new Error(`a symbolic ${type}; the type checker should have caught this`);
-      if (op !== "add" && op !== "sub") {
-        const [l, r] = needNow([left, right], op === "mul" ? "this multiplication" : "this division");
-        return concrete(arith(op, type, l as ConcreteValue, r as ConcreteValue));
-      }
-      try {
-        return { kind: "symbolic", term: store.arithmetic(termOf(left), termOf(right), op === "add" ? 1n : -1n) };
-      } catch (error) {
-        if (error instanceof TermError) throw new RuntimeFault(error.message);
-        throw error;
-      }
-    },
-    output: (arg, newline) => {
-      const value = settle(arg);
-      if (value.kind === "concrete") {
-        const text = renderValue(value.value);
-        writes.push({ text, term: null, heldSince: null, newline });
-        effects.push(newline ? { kind: "say", line: text } : { kind: "write", text });
-      } else {
-        // The write happens now, but only the future can say what it reads.
-        writes.push({ text: null, term: value.term, heldSince: now, newline });
-        store.noteUse(value.term, now);
-        effects.push({ kind: "hold", term: store.format(value.term) });
-      }
-      commit();
-    },
-    effect: (target, args, types) => {
-      // An effect barrier: output held on an open symbol was written before this
-      // effect, so this effect may not reach the outside world first. Stop here,
-      // before anything is committed, rather than reorder what the world observes.
-      if (committed < writes.length) {
-        const open = [...new Set(writes.slice(committed).flatMap((w) => (w.text === null && w.term ? pendingLabels(w.term) : [])))];
-        effects.push({ kind: "unresolved", symbols: open });
-        halt("UNRESOLVED", `'${target.namespace} ${target.name}' cannot run while earlier output is held on ${open.join(", ")}: an effect never overtakes held output`);
-        throw new Stopped();
-      }
-      try {
-        const result = target.perform(args, effectContext, types);
-        events.push({ step: now, source: target.id, value: showValue(result) });
-        effects.push({ kind: "effect", source: target.id, value: showValue(result) });
-        return result;
-      } catch (error) {
-        if (error instanceof RuntimeFault) throw error;
-        // The host itself broke (not an ordinary error the program can handle).
-        throw new RuntimeFault(`'${target.namespace} ${target.name}' failed in the host: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
-    now: (value, purpose) => needNow([value], purpose)[0] as ConcreteValue,
-  };
-
-  const forward: Instruction = { op: "nop" };
+  const rt = createRuntime(program, options);
+  const env = rt.env;
 
   const condition = (e: Expr): boolean => {
-    // A comparison reports both sides; it needs both of them now.
-    const comparison = e.node === "Eq" ? { eq: e, negated: false } : e.node === "Not" && e.operand.node === "Eq" ? { eq: e.operand, negated: true } : null;
-    if (comparison) {
-      const [left, right] = needNow([evaluate(comparison.eq.left, env), evaluate(comparison.eq.right, env)], "this condition");
-      const holds = sameValue(left as ConcreteValue, right as ConcreteValue) !== comparison.negated;
-      effects.push({ kind: "test", left: left as ConcreteValue, right: right as ConcreteValue, negated: comparison.negated, holds });
-      return holds;
-    }
-    if (e.node === "Compare") {
-      const [left, right] = needNow([evaluate(e.left, env), evaluate(e.right, env)], "this condition");
-      const holds = order(e.op, left as ConcreteValue, right as ConcreteValue);
-      effects.push({ kind: "order", op: e.op, left: left as ConcreteValue, right: right as ConcreteValue, holds });
-      return holds;
-    }
-    const [value] = needNow([evaluate(e, env)], "this condition");
-    const holds = value?.kind === "bool" && value.value;
-    effects.push({ kind: "condition", holds });
-    return holds;
+    if (e.node === "Eq") return rt.testEquality(evaluate(e.left, env), evaluate(e.right, env), false);
+    if (e.node === "Not" && e.operand.node === "Eq") return rt.testEquality(evaluate(e.operand.left, env), evaluate(e.operand.right, env), true);
+    if (e.node === "Compare") return rt.testOrder(e.op, evaluate(e.left, env), evaluate(e.right, env));
+    return rt.testBool(evaluate(e, env));
   };
 
   const execute = (stmt: Stmt, pose: Pose): Instruction => {
     switch (stmt.node) {
       case "StoreNoun":
-        assign(stmt.noun, evaluate(stmt.value, env));
+        rt.assign(stmt.noun, evaluate(stmt.value, env));
         return forward;
       case "Eval":
         evaluate(stmt.expr, env);
         return forward;
-      case "TemporalDeclare": {
-        const term = store.declare(nameOf(stmt.noun), now);
-        define(stmt.noun, { kind: "symbolic", term });
-        effects.push({ kind: "declare", name: nameOf(stmt.noun), symbol: store.format(term) });
+      case "TemporalDeclare":
+        rt.declare(stmt.noun);
+        return forward;
+      case "TemporalReceive":
+        rt.receive(stmt.noun);
+        return forward;
+      case "TemporalSend":
+        rt.send(stmt.noun);
+        return forward;
+      case "TemporalAssert": {
+        const left = rt.pastLeft(stmt.noun, stmt.moment);
+        // A noun on the right keeps its symbolic identity, so the constraint says what it is about.
+        const right = stmt.value.node === "LoadNoun" ? rt.recorded(stmt.value.noun) : evaluate(stmt.value, env);
+        rt.past(left, right, stmt.moment);
         return forward;
       }
-      case "TemporalReceive": {
-        // A channel opens: the noun takes a value that something later will send back.
-        const symbol = store.declare(nameOf(stmt.noun), now, "다음");
-        slotCount += 1;
-        const slot: Slot = { id: `S${slotCount}`, noun: stmt.noun, symbol, openedAt: now };
-        slots.set(stmt.noun, [...(slots.get(stmt.noun) ?? []), slot]);
-        define(stmt.noun, { kind: "symbolic", term: symbol });
-        effects.push({ kind: "open", slot: slot.id, name: nameOf(stmt.noun), symbol: store.format(symbol) });
+      case "TemporalPromise":
+        rt.promise(stmt.noun, evaluate(stmt.value, env));
         return forward;
-      }
-      case "TemporalSend": {
-        const slot = slots.get(stmt.noun)?.pop();
-        const sent = recorded(stmt.noun);
-        if (!slot) {
-          effects.push({ kind: "contradiction", reason: `nothing earlier is waiting for '${nameOf(stmt.noun)}'` });
-          halt("PARADOX", `[${sentence}] cannot hold: no past is listening for '${nameOf(stmt.noun)}'`);
-          return forward;
-        }
-        const selfLoop = noteLoop(slot.symbol, termOf(sent), `channel ${slot.id}`);
-        effects.push({ kind: "close", slot: slot.id, sent: store.format(termOf(sent)), openedAt: slot.openedAt, selfLoop });
-        constrain(slot.symbol, termOf(sent), `channel ${slot.id}`, sentence);
+      case "TemporalFixedPoint":
+        rt.fixedPoint();
         return forward;
-      }
       case "Move":
         return { op: "step", relative: stmt.relative };
       case "Turn":
         return stmt.turn ? { op: "turn", turn: stmt.turn } : { op: "face", compass: stmt.compass as NonNullable<typeof stmt.compass> };
       case "FloorMove":
         return { op: "floor", delta: stmt.delta };
-      case "Anchor": {
-        const open = cycles.findIndex((cycle) => cycle.anchor && sameCoordinate(cycle.anchor.position, pose.position));
-        if (open >= 0) {
-          while (cycles.length > open + 1) leaveInnermost();
-          const cycle = cycles[open] as Scope;
-          endIteration(cycle); // reached again without a back-edge: the iteration ended here
-          cycle.iteration += 1;
-          beginIteration(cycle);
-          effects.push({ kind: "anchor", at: pose.position, iteration: cycle.iteration });
-        } else {
-          const cycle: Scope = { anchor: pose, iteration: 1, start: new Map(), written: new Set(), promises: [], endReads: [], fixed: [] };
-          beginIteration(cycle);
-          cycles.push(cycle);
-          effects.push({ kind: "anchor", at: pose.position, iteration: 1 });
-        }
+      case "Anchor":
+        rt.anchor(pose);
         return forward;
-      }
-      case "BackEdge": {
-        const cycle = cycles[cycles.length - 1];
-        if (!cycle) throw new RuntimeFault("'끝은 처음이다' with no open '여기가 처음이다' to return to");
-        endIteration(cycle);
-        effects.push({ kind: "back", to: (cycle.anchor as Pose).position });
-        return { op: "jump", to: cycle.anchor as Pose };
-      }
+      case "BackEdge":
+        return { op: "jump", to: rt.backEdge() };
       case "CallPlane": {
         const procedure = program.procedures.get(stmt.plane);
         if (!procedure) throw new Error(`no callable plane ${stmt.plane}; the compiler should have caught this`);
         // Arguments are evaluated in the caller, and may be symbolic: a call passes a
         // value through, it does not need it now.
-        const args = stmt.args.map((arg) => settle(evaluate(arg, env)));
-        activations += 1;
-        const callee: Frame = {
-          activation: activations,
-          label: `${procedure.name}#${activations}`,
-          body: procedure,
-          current: new Map(),
-          root: newScope(),
-          cycles: [],
-          slots: new Map(),
-          returnTo: pose,
-          results: stmt.results,
-        };
-        frames.push(callee);
-        enter(callee);
-        procedure.params.forEach((p, i) => {
-          const arg = args[i] as Value;
-          if (arg.kind === "symbolic") store.noteUse(arg.term, now);
-          define(p.noun, arg);
-        });
-        effects.push({ kind: "call", frame: callee.label as string, args: procedure.params.map((p, i) => `${p.name} := ${show(args[i] as Value)}`) });
-        return { op: "call", space: procedure.space, to: CALL_ENTRY, label: callee.label as string };
+        const label = rt.callEnter(procedure, stmt.args.map((arg) => evaluate(arg, env)), pose, stmt.results);
+        return { op: "call", space: procedure.space, to: CALL_ENTRY, label };
       }
       case "Return": {
-        const values = stmt.values.map((v) => settle(evaluate(v, env)));
-        const returning = frame;
-        if (!returning.returnTo) throw new RuntimeFault("only a callable plane returns; the main volume ends with '끝이다'");
-        // The call is over: its open cycles, then its own obligations, fall due now.
-        while (cycles.length > 0 && !stop) leaveInnermost();
-        endIteration(returning.root);
-        for (const [, open] of slots) {
-          for (const slot of open) effects.push({ kind: "unanswered", slot: slot.id, symbol: store.format(slot.symbol) });
-        }
-        effects.push({ kind: "return", frame: returning.label as string, values: values.map(show) });
-        frames.pop();
-        const caller = frames[frames.length - 1] as Frame;
-        enter(caller);
-        // A plane that returns nothing gives () to a single receiving noun.
-        returning.results.forEach((noun, i) => assign(noun, values[i] ?? concrete(UNIT)));
+        const { returnTo, caller } = rt.callReturn(stmt.values.map((v) => evaluate(v, env)));
         // Back to the call cell's pose, orientation and all, then on as from any cell.
-        return { op: "return", space: caller.body.space, to: nextPose(returning.returnTo, forward), label: caller.label };
+        return { op: "return", space: caller.body.space, to: nextPose(returnTo, forward), label: caller.label };
       }
-      case "End": {
-        if (frames.length > 1) throw new RuntimeFault("'끝이다' ends the program; a callable plane returns with '돌려준다' or '돌아간다'");
-        while (cycles.length > 0 && !stop) leaveInnermost();
-        endIteration(run);
-        effects.push({ kind: "end" });
-        for (const [, open] of slots) {
-          for (const slot of open) effects.push({ kind: "unanswered", slot: slot.id, symbol: store.format(slot.symbol) });
-        }
-        const undetermined = writes.flatMap((line) => (line.text === null && line.term ? pendingLabels(line.term) : []));
-        if (!stop && undetermined.length > 0) {
-          const symbols = [...new Set(undetermined)];
-          effects.push({ kind: "ambiguous", symbols });
-          halt("AMBIGUOUS", `the output depends on ${symbols.join(", ")}, which the constraints leave open`);
-        }
+      case "End":
+        rt.end();
         return { op: "end" };
-      }
       case "Branch": {
         if (condition(stmt.condition)) return execute(stmt.then, pose);
-        if (stmt.then.node === "BackEdge") leaveInnermost();
-        return forward;
-      }
-      case "TemporalAssert": {
-        const left = stmt.moment === "start" ? atStart(stmt.noun) : recorded(stmt.noun);
-        // A noun on the right keeps its symbolic identity, so the constraint says what it is about.
-        const right = stmt.value.node === "LoadNoun" ? recorded(stmt.value.noun) : evaluate(stmt.value, env);
-        constrain(termOf(left), termOf(right), stmt.moment === "start" ? "past, at 처음" : "past", sentence);
-        return forward;
-      }
-      case "TemporalPromise": {
-        const s = scope();
-        const term = termOf(evaluate(stmt.value, env));
-        effects.push({ kind: "promise", name: nameOf(stmt.noun), term: store.format(term), due: dueLabel(s) });
-        s.promises.push({ noun: stmt.noun, term, madeAt: now, sentence });
-        return forward;
-      }
-      case "TemporalFixedPoint": {
-        const s = scope();
-        if (!s.anchor) throw new RuntimeFault("'처음은 끝이었다' needs an open '여기가 처음이다' whose start it can compare with");
-        s.fixed.push({ madeAt: now, sentence });
-        effects.push({ kind: "fixed", due: dueLabel(s) });
+        if (stmt.then.node === "BackEdge") rt.leaveInnermost();
         return forward;
       }
     }
   };
 
   const decode = (_text: string, pose: Pose): DecodeResult => {
-    const stmt = frame.body.cells.get(coordinateKey(pose.position));
+    const stmt = rt.frame().body.cells.get(coordinateKey(pose.position));
     if (!stmt) return { error: "this cell was not compiled" };
-    sentence = stmt.at.source;
     try {
       return execute(stmt, pose);
     } catch (error) {
@@ -656,66 +107,15 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
 
   let state = createMachine(program.space, manifest, options);
   const trace: ProgramTraceEntry[] = [];
-  let lastAt: Coordinate = state.pose.position;
-  let lastFrame: string | null = null;
-  while (!state.outcome && !stop) {
-    effects = [];
-    now = state.steps + 1;
-    lastAt = state.pose.position;
-    lastFrame = frame.label;
+  while (!state.outcome && !rt.stopped()) {
+    const position = state.pose.position;
+    rt.beginStep(state.steps + 1, position, rt.frame().body.cells.get(coordinateKey(position))?.at.source ?? "");
+    const frame = rt.frame().label;
     // The machine's space and the innermost frame's body move together (call, return).
-    if (state.space !== frame.body.space) throw new Error("the machine and the frame stack disagree about the current space");
+    if (state.space !== rt.frame().body.space) throw new Error("the machine and the frame stack disagree about the current space");
     const result = step(state, decode);
     state = result.state;
-    if (result.entry) trace.push({ ...result.entry, effects, frame: lastFrame });
+    if (result.entry) trace.push({ ...result.entry, effects: rt.effects(), frame });
   }
-
-  // A temporal stop happens while a cell runs; it outranks whatever the machine did next.
-  const finalStop = stop as { status: TemporalStatus; message: string } | null;
-  const ended: ProgramOutcome = finalStop
-    ? { status: finalStop.status, steps: state.steps, at: lastAt, message: finalStop.message }
-    : (state.outcome as ProgramOutcome);
-  // An outcome inside a call says which activation it happened in: where the pointer
-  // went for VOID and STEP_LIMIT (their positions are the next pose), where the cell ran
-  // for the rest.
-  const label = !finalStop && (ended.status === "VOID" || ended.status === "STEP_LIMIT") ? frame.label : lastFrame;
-  const outcome: ProgramOutcome = label === null ? ended : { ...ended, frame: label };
-
-  const values = new Map<string, ConcreteValue>();
-  for (const [noun, v] of main.current) {
-    const settled = settle(v.binding);
-    if (settled.kind === "concrete") values.set(nameOf(noun), settled.value);
-  }
-  const summarize = (info: SymbolInfo): SymbolSummary => ({
-    label: info.label,
-    noun: info.noun,
-    born: info.born,
-    state: store.state(info.id),
-    value: info.value ? renderValue(info.value) : null,
-    resolvedAt: info.resolvedAt,
-    loop: info.selfLoop,
-    mark: info.value && info.selfLoop ? "SELF_CAUSED" : info.retroactive ? "RETRO" : null,
-  });
-
-  // The run is over: whatever is still held is written as "?".
-  commit(true);
-  const stdout = writes.map((w) => (w.text ?? "?") + (w.newline ? "\n" : "")).join("");
-  const output = stdout === "" ? [] : (stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout).split("\n");
-
-  return {
-    outcome,
-    output,
-    events,
-    values,
-    symbols: store.all().map(summarize),
-    versions: history.map((v) => ({
-      ...(v.frame === null ? {} : { frame: v.frame }),
-      noun: nameOf(v.noun),
-      index: v.index,
-      definedAt: v.definedAt,
-      value: describe(v.binding),
-      uses: [...v.uses],
-    })),
-    trace,
-  };
+  return rt.finish(state.outcome as ProgramOutcome | null, state.steps, trace);
 }
