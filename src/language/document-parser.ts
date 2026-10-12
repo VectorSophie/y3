@@ -1,6 +1,7 @@
 import type {
   CellAst,
   Comment,
+  DeclarationAst,
   DefinitionAst,
   DocumentAst,
   FrontMatterAst,
@@ -28,6 +29,8 @@ const FRONT_MATTER_FENCE = "+++";
 
 export const PLANE_NAME_PATTERN = /^[\p{L}_][\p{L}\p{N}_-]*$/u;
 const DEFINITION_HEAD = /^:([^:\s]*):\s*(.*)$/u;
+const DECLARATION_KEYWORD = "자료";
+const DECLARATION_HEAD = /^자료\s+([\p{L}_][\p{L}\p{N}_]*)/u;
 
 class SyntaxFailure extends Error {
   constructor(public readonly diagnostic: Diagnostic) {
@@ -382,14 +385,9 @@ function parseOrThrow(source: string): DocumentAst {
       if (appendix !== null) {
         fail(CODES.SECOND_APPENDIX, `a document has at most one '${APPENDIX_MARK}' section`, lineSpan(lineIndex, text));
       }
-      if (volume.length === 0) {
-        fail(
-          CODES.APPENDIX_BEFORE_PLANES,
-          `the volume needs at least one plane before '${APPENDIX_MARK}'`,
-          lineSpan(lineIndex, text),
-        );
-      }
-      appendix = { comments: pending, definitions: [], span: lineSpan(lineIndex, text) };
+      // With no planes before it, the document is a library module: declarations and
+      // callable planes, nothing to run.
+      appendix = { comments: pending, declarations: [], definitions: [], span: lineSpan(lineIndex, text) };
       pending = [];
       cursor.index += 1;
       continue;
@@ -409,6 +407,23 @@ function parseOrThrow(source: string): DocumentAst {
       continue;
     }
 
+    if (trimmed === DECLARATION_KEYWORD || trimmed.startsWith(`${DECLARATION_KEYWORD} `) || trimmed.startsWith(`${DECLARATION_KEYWORD}\t`)) {
+      const name = trimmed.match(DECLARATION_HEAD)?.[1];
+      if (name === undefined) {
+        fail(CODES.MALFORMED_DECLARATION, `a type declaration is written "${DECLARATION_KEYWORD} 이름 = …"`, lineSpan(lineIndex, text));
+      }
+      const declaration: DeclarationAst = {
+        name,
+        text: trimmed.replace(/\s+/g, " "),
+        comments: pending,
+        span: spanOf(lineIndex + 1, indent + 1, lineIndex + 1, text.trimEnd().length + 1),
+      };
+      appendix.declarations.push(declaration);
+      pending = [];
+      cursor.index += 1;
+      continue;
+    }
+
     const head = trimmed.match(DEFINITION_HEAD);
     if (head === null) {
       if (trimmed.startsWith(PLANE_OPEN)) {
@@ -425,7 +440,18 @@ function parseOrThrow(source: string): DocumentAst {
       );
     }
     const name = head[1] ?? "";
-    const rest = head[2] ?? "";
+    const afterName = head[2] ?? "";
+    // A callable plane has a signature between its name and '⟦'.
+    const open = afterName.indexOf(PLANE_OPEN);
+    const signatureText = open < 0 ? afterName.trim() : afterName.slice(0, open).trim();
+    const rest = open < 0 ? afterName : afterName.slice(open);
+    if (signatureText.length > 0 && (!signatureText.startsWith("(") || open < 0)) {
+      fail(
+        CODES.MALFORMED_SIGNATURE,
+        `after ':${name}:' expect '${PLANE_OPEN}', or a signature "(이름: 타입, …) → 타입" and then '${PLANE_OPEN}'`,
+        lineSpan(lineIndex, text),
+      );
+    }
     if (!PLANE_NAME_PATTERN.test(name)) {
       fail(
         CODES.INVALID_NAME,
@@ -451,6 +477,7 @@ function parseOrThrow(source: string): DocumentAst {
     }
     const definition: DefinitionAst = {
       name,
+      signature: signatureText.length > 0 ? signatureText.replace(/\s+/g, " ") : null,
       plane,
       comments: pending,
       span: { start: pos(lineIndex + 1, indent + 1), end: plane.span.end },
@@ -459,9 +486,11 @@ function parseOrThrow(source: string): DocumentAst {
     pending = [];
   }
 
-  if (volume.length === 0) {
-    fail(CODES.NO_PLANES, "a Y3 document needs at least one plane", spanOf(1, 1, 1, 1));
+  if (volume.length === 0 && appendix === null) {
+    fail(CODES.NO_PLANES, "a Y3 document needs at least one plane (or, for a library module, a ※ section)", spanOf(1, 1, 1, 1));
   }
-  const keptAppendix = appendix !== null && (appendix.definitions.length > 0 || appendix.comments.length > 0) ? appendix : null;
+  const keepAppendix =
+    appendix !== null && (volume.length === 0 || appendix.definitions.length > 0 || appendix.declarations.length > 0 || appendix.comments.length > 0);
+  const keptAppendix = keepAppendix ? appendix : null;
   return { frontMatter, volume, appendix: keptAppendix, trailingComments: pending };
 }

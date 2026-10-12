@@ -1,4 +1,4 @@
-import type { Comment, DefinitionAst, DocumentAst, InlinePlaneAst, PlaneRefAst } from "../language/ast";
+import type { Comment, DeclarationAst, DefinitionAst, DocumentAst, InlinePlaneAst, PlaneRefAst } from "../language/ast";
 import { APPENDIX_STYLE, planeStyle, type PlaneStyle, type Projection } from "./projection";
 import { displayWidth } from "./width";
 
@@ -68,11 +68,29 @@ export function canonicalDefinitionOrder(volume: DocumentAst["volume"], definiti
   });
 }
 
+// Type declarations come first, in lexical order of their names: like definitions,
+// their order carries no meaning.
+export function canonicalDeclarationOrder(declarations: readonly DeclarationAst[]): DeclarationAst[] {
+  return [...declarations].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
 export function canonicalizeDocument(ast: DocumentAst): DocumentAst {
   if (!ast.appendix) {
     return ast;
   }
-  return { ...ast, appendix: { ...ast.appendix, definitions: canonicalDefinitionOrder(ast.volume, ast.appendix.definitions) } };
+  return {
+    ...ast,
+    appendix: {
+      ...ast.appendix,
+      declarations: canonicalDeclarationOrder(ast.appendix.declarations),
+      definitions: canonicalDefinitionOrder(ast.volume, ast.appendix.definitions),
+    },
+  };
+}
+
+// The opening line of a named plane: ':name: ⟦', or ':name: (signature) ⟦'.
+export function definitionHead(definition: Pick<DefinitionAst, "name" | "signature">): string {
+  return definition.signature === null ? `:${definition.name}:` : `:${definition.name}: ${definition.signature}`;
 }
 
 export function formatDocument(source: DocumentAst, options: FormatOptions = {}): string {
@@ -91,9 +109,12 @@ export function formatDocument(source: DocumentAst, options: FormatOptions = {})
 
   if (ast.appendix) {
     blocks.push([...renderComments(ast.appendix.comments, ""), "※"]);
+    if (ast.appendix.declarations.length > 0) {
+      blocks.push(ast.appendix.declarations.flatMap((declaration) => [...renderComments(declaration.comments, ""), declaration.text]));
+    }
     for (const definition of ast.appendix.definitions) {
       const [open, ...rest] = renderPlane(definition.plane, APPENDIX_STYLE);
-      blocks.push([...renderComments(definition.comments, ""), `:${definition.name}: ${open}`, ...rest]);
+      blocks.push([...renderComments(definition.comments, ""), `${definitionHead(definition)} ${open}`, ...rest]);
     }
   }
 

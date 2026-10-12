@@ -25,13 +25,27 @@ export type PlaneSlotAst = {
 
 export type DefinitionAst = {
   name: string;
+  // A callable plane's signature as written between ':name:' and '⟦', e.g.
+  // "(수: Int) → Int"; null for a plane that is only ever placed in the volume.
+  // Kept as text, like a cell's sentence; semantics/ parses it.
+  signature: string | null;
   plane: InlinePlaneAst;
+  comments: Comment[];
+  span: Span;
+};
+
+// A type declaration in the ※ section, one line: "자료 점 = { 가로: Int, 세로: Int }".
+// Kept as text (whitespace collapsed); semantics/ parses it.
+export type DeclarationAst = {
+  name: string;
+  text: string;
   comments: Comment[];
   span: Span;
 };
 
 export type AppendixAst = {
   comments: Comment[]; // comments written just before "※"
+  declarations: DeclarationAst[];
   definitions: DefinitionAst[];
   span: Span;
 };
@@ -40,7 +54,7 @@ export type FrontMatterAst = { text: string; span: Span };
 
 export type DocumentAst = {
   frontMatter: FrontMatterAst | null;
-  volume: PlaneSlotAst[]; // index = z
+  volume: PlaneSlotAst[]; // index = z; empty only in a library module, which has a ※ section
   appendix: AppendixAst | null;
   trailingComments: Comment[];
 };

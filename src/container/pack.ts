@@ -6,9 +6,10 @@ import { formatDocument } from "../format/formatter";
 // The folder form of a .y3 document, produced only on request:
 //
 //   META-INF/manifest.toml   front matter, if any
-//   space/main.y3s           the volume (inline planes stay inline), plus a bare "※"
-//                            line when comments belong to the ※ section
-//   planes/<name>.y2         one named plane per file
+//   space/main.y3s           the volume (inline planes stay inline), plus the ※ section's
+//                            comments and type declarations (자료 …), when there are any
+//   planes/<name>.y2         one named plane per file; a callable plane's file opens
+//                            with its signature: "(수: Int) → Int ⟦"
 //
 // A folder has no order; the formatter puts the ※ section in its one canonical order
 // (first use, then lexical), so pack(unpack(doc)) is exactly formatDocument(doc).
@@ -43,10 +44,15 @@ export function unpackDocument(source: string): FileMap {
   }
 
   const appendixComments = ast.appendix?.comments ?? [];
+  const declarations = ast.appendix?.declarations ?? [];
+  const library = ast.volume.length === 0;
   const main: DocumentAst = {
     frontMatter: null,
     volume: ast.volume,
-    appendix: appendixComments.length > 0 ? { comments: appendixComments, definitions: [], span: NO_SPAN } : null,
+    appendix:
+      library || appendixComments.length > 0 || declarations.length > 0
+        ? { comments: appendixComments, declarations, definitions: [], span: NO_SPAN }
+        : null,
     trailingComments: ast.trailingComments,
   };
   files.set(MAIN_PATH, formatDocument(main));
@@ -72,14 +78,27 @@ export function unpackDocument(source: string): FileMap {
       appendix: null,
       trailingComments: [],
     };
-    files.set(`${PLANES_DIR}${definition.name}${PLANE_EXTENSION}`, formatDocument(planeFile));
+    const text = formatDocument(planeFile);
+    // The plane's own "⟦" line (after any comments) carries the signature.
+    const withSignature =
+      definition.signature === null ? text : text.replace(/^⟦$/mu, `${definition.signature} ⟦`);
+    files.set(`${PLANES_DIR}${definition.name}${PLANE_EXTENSION}`, withSignature);
   }
   return files;
 }
 
 function readPlaneFile(path: string, source: string): DefinitionAst {
   const name = path.slice(PLANES_DIR.length, -PLANE_EXTENSION.length);
-  const ast = parseOrThrow(source, path);
+  // A callable plane's file opens with "(signature) ⟦"; the rest is an ordinary plane.
+  let signature: string | null = null;
+  const lines = source.split(/\r\n|\n|\r/);
+  const open = lines.findIndex((line) => line.trim().length > 0 && !line.trim().startsWith("#"));
+  const head = lines[open]?.trim() ?? "";
+  if (head.startsWith("(") && head.includes("⟦")) {
+    signature = head.slice(0, head.indexOf("⟦")).trim().replace(/\s+/g, " ");
+    lines[open] = head.slice(head.indexOf("⟦"));
+  }
+  const ast = parseOrThrow(lines.join("\n"), path);
   const slot = ast.volume[0];
   if (
     ast.volume.length !== 1 ||
@@ -93,7 +112,7 @@ function readPlaneFile(path: string, source: string): DefinitionAst {
       error(CODES.BAD_PLANE_FILE, `${path}: a .y2 file holds exactly one written-out plane (comments may precede it)`),
     ]);
   }
-  return { name, plane: slot.plane, comments: slot.comments, span: NO_SPAN };
+  return { name, signature, plane: slot.plane, comments: slot.comments, span: NO_SPAN };
 }
 
 export function packDocument(files: FileMap): string {
@@ -122,13 +141,14 @@ export function packDocument(files: FileMap): string {
   }
 
   const definitions = [...(main.appendix?.definitions ?? []), ...planeFiles];
+  const declarations = main.appendix?.declarations ?? [];
   const manifest = files.get(MANIFEST_PATH);
   const document: DocumentAst = {
     frontMatter: manifest === undefined ? null : { text: manifest.replace(/\s+$/, ""), span: NO_SPAN },
     volume: main.volume,
     appendix:
-      definitions.length > 0 || (main.appendix?.comments.length ?? 0) > 0
-        ? { comments: main.appendix?.comments ?? [], definitions, span: NO_SPAN }
+      main.volume.length === 0 || definitions.length > 0 || declarations.length > 0 || (main.appendix?.comments.length ?? 0) > 0
+        ? { comments: main.appendix?.comments ?? [], declarations, definitions, span: NO_SPAN }
         : null,
     trailingComments: main.trailingComments,
   };

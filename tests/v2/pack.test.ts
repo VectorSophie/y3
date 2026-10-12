@@ -19,6 +19,50 @@ describe("pack / unpack", () => {
     expect(files.get("planes/detour.y2")).toBe('⟦\n[ ]\n[ ]\n[ ]\n["둘"을 말한다.]\n[아래층으로 간다.]\n⟧\n');
   });
 
+  it("keeps signatures and type declarations through fmt and pack/unpack (M6)", () => {
+    const source = `⟦
+[결과는 제곱: 3]
+[끝이다.]
+⟧
+
+※
+
+자료 점 = { 가로: Int, 세로: Int }
+
+# squares a number
+:제곱:   (수: Int)   →  Int ⟦
+[수를 돌려준다.]
+⟧
+
+:바닥: ⟦ [ ] ⟧
+`;
+    const ast = parseOk(source);
+    expect(ast.appendix?.declarations.map((d) => [d.name, d.text])).toEqual([["점", "자료 점 = { 가로: Int, 세로: Int }"]]);
+    expect(ast.appendix?.definitions.map((d) => [d.name, d.signature])).toEqual([
+      ["제곱", "(수: Int) → Int"],
+      ["바닥", null],
+    ]);
+    const formatted = formatDocument(ast);
+    expect(formatted).toContain("※\n\n자료 점 = { 가로: Int, 세로: Int }\n\n:바닥: ⟦");
+    expect(formatted).toContain("\n\n# squares a number\n:제곱: (수: Int) → Int ⟦\n[수를 돌려준다.]\n⟧\n");
+    expect(formatDocument(parseOk(formatted))).toBe(formatted);
+    const files = unpackDocument(source);
+    expect(files.get("planes/제곱.y2")).toBe("# squares a number\n(수: Int) → Int ⟦\n[수를 돌려준다.]\n⟧\n");
+    expect(files.get(MAIN_PATH)).toContain("자료 점 = { 가로: Int, 세로: Int }");
+    expect(packDocument(files)).toBe(formatted);
+  });
+
+  it("accepts a library module: a ※ section and no volume (M6)", () => {
+    const source = "※\n\n자료 쌍 = { 첫: Int, 둘: Int }\n\n:하나더: (수: Int) → Int ⟦ [수를 돌려준다.] ⟧\n";
+    const ast = parseOk(source);
+    expect(ast.volume).toEqual([]);
+    const formatted = formatDocument(ast);
+    expect(formatted).toBe("※\n\n자료 쌍 = { 첫: Int, 둘: Int }\n\n:하나더: (수: Int) → Int ⟦\n[수를 돌려준다.]\n⟧\n");
+    expect(packDocument(unpackDocument(source))).toBe(formatted);
+    expect(formatDocument(parseOk("※\n"))).toBe("※\n");
+    expect(packDocument(unpackDocument("※\n"))).toBe("※\n");
+  });
+
   it("keeps inline planes inline in main.y3s", () => {
     const files = unpackDocument(readRepoFile("examples/v2/stairwell.y3"));
     expect([...files.keys()].sort()).toEqual([MANIFEST_PATH, MAIN_PATH].sort());
