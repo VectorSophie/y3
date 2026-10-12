@@ -10,6 +10,7 @@ import { concrete, RuntimeFault, type EvalEnv, type Value } from "./evaluate";
 import { arith, order, type OrderOp } from "../semantics/numeric";
 import type { ProgramOutcome, TemporalStatus } from "./program-outcome";
 import type { TraceEntry } from "./trace";
+import { emptyTemporalGraph, type TemporalGraph } from "../temporal/graph";
 
 // The runtime core: everything that executing a Y3 program does, as services. Two
 // engines drive it: the HIR interpreter (runtime/interpreter), which finds control flow
@@ -156,6 +157,7 @@ export type ProgramResult = {
   readonly symbols: readonly SymbolSummary[];
   readonly versions: readonly VersionSummary[];
   readonly trace: readonly ProgramTraceEntry[];
+  readonly temporal: TemporalGraph; // the temporal constraint graph the run built
 };
 
 // A temporal stop (UNRESOLVED, PARADOX) in the middle of a statement: the engine ends
@@ -221,6 +223,12 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
   let sentence = "";
   let stop: { status: TemporalStatus; message: string } | null = null;
 
+  const graph = emptyTemporalGraph();
+  const born = (term: SymbolicTerm, noun: NounId) => {
+    const info = store.info(symbolsOf(term)[0] as number);
+    graph.symbols.push({ label: info.label, origin: info.origin, noun: nameOf(noun), born: now, frame: frame.label });
+  };
+
   const halt = (status: TemporalStatus, message: string) => {
     if (!stop) stop = { status, message };
   };
@@ -285,6 +293,7 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
   const fromEnd = (noun: NounId): Binding => {
     const s = scope();
     const symbol = store.declare(nameOf(noun), now, "끝");
+    born(symbol, noun);
     s.endReads.push({ noun, symbol, madeAt: now, sentence });
     effects.push({ kind: "endread", name: nameOf(noun), symbol: store.format(symbol), due: dueLabel(s) });
     return { kind: "symbolic", term: symbol };
@@ -328,8 +337,18 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
 
   // Adds left = right as a constraint and reports what it settles.
   const constrain = (left: SymbolicTerm, right: SymbolicTerm, source: string, statement: string) => {
-    effects.push({ kind: "constrain", equation: `${store.format(left)} = ${store.format(right)}`, source });
+    const equation = `${store.format(left)} = ${store.format(right)}`;
+    effects.push({ kind: "constrain", equation, source });
+    const id = graph.constraints.length;
+    for (const sym of new Set([...symbolsOf(left), ...symbolsOf(right)])) graph.edges.push({ kind: "mentions", constraint: id, symbol: store.info(sym).label });
     const result = store.equate(left, right, now);
+    graph.constraints.push({ id, step: now, source, equation, holds: result.kind !== "contradiction" });
+    if (result.kind === "consistent") {
+      for (const r of result.resolutions) {
+        graph.edges.push({ kind: "resolves", constraint: id, symbol: r.symbol.label, value: showValue(r.value) });
+        for (const step of r.fills) graph.edges.push({ kind: "fills", symbol: r.symbol.label, step });
+      }
+    }
     if (result.kind === "contradiction") {
       effects.push({ kind: "contradiction", reason: result.reason });
       halt("PARADOX", `[${statement}] cannot hold: ${result.reason}`);
@@ -346,7 +365,11 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
     if (carriesCause(origin) || carriesCause(returned)) return false;
     const back = new Set(symbolsOf(returned));
     const closed = symbolsOf(origin).filter((id) => back.has(id));
-    for (const id of closed) store.info(id).selfLoop ??= via;
+    for (const id of closed) {
+      const info = store.info(id);
+      if (info.selfLoop === null) graph.edges.push({ kind: "closes", symbol: info.label, via });
+      info.selfLoop ??= via;
+    }
     return closed.length > 0;
   };
 
@@ -471,6 +494,7 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
 
   const declare = (noun: NounId) => {
     const term = store.declare(nameOf(noun), now);
+    born(term, noun);
     define(noun, { kind: "symbolic", term });
     effects.push({ kind: "declare", name: nameOf(noun), symbol: store.format(term) });
   };
@@ -478,6 +502,7 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
   // A channel opens: the noun takes a value that something later will send back.
   const receive = (noun: NounId) => {
     const symbol = store.declare(nameOf(noun), now, "다음");
+    born(symbol, noun);
     slotCount += 1;
     const slot: Slot = { id: `S${slotCount}`, noun, symbol, openedAt: now };
     slots.set(noun, [...(slots.get(noun) ?? []), slot]);
@@ -686,6 +711,7 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
         uses: [...v.uses],
       })),
       trace,
+      temporal: graph,
     };
   };
 

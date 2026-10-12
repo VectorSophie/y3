@@ -50,5 +50,6 @@ export function observable(r: ProgramResult) {
     symbols: r.symbols,
     versions: r.versions,
     trace: r.trace,
+    temporal: r.temporal,
   });
 }

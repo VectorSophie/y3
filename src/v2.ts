@@ -48,3 +48,4 @@ export * from "./compiler/mir";
 export * from "./compiler/compile";
 export * from "./runtime/vm";
 export * from "./compiler/bytecode";
+export * from "./temporal/graph";
