@@ -31,6 +31,9 @@ export const PLANE_NAME_PATTERN = /^[\p{L}_][\p{L}\p{N}_-]*$/u;
 const DEFINITION_HEAD = /^:([^:\s]*):\s*(.*)$/u;
 const DECLARATION_KEYWORD = "자료";
 const DECLARATION_HEAD = /^자료\s+([\p{L}_][\p{L}\p{N}_]*)/u;
+// 외부 declarations sit beside 자료 ones; their name is "<alias> <function>".
+const FOREIGN_KEYWORD = "외부";
+const FOREIGN_HEAD = /^외부\s+([\p{L}_][\p{L}\p{N}_]*\s+[\p{L}_][\p{L}\p{N}_]*)/u;
 
 class SyntaxFailure extends Error {
   constructor(public readonly diagnostic: Diagnostic) {
@@ -407,10 +410,15 @@ function parseOrThrow(source: string): DocumentAst {
       continue;
     }
 
-    if (trimmed === DECLARATION_KEYWORD || trimmed.startsWith(`${DECLARATION_KEYWORD} `) || trimmed.startsWith(`${DECLARATION_KEYWORD}\t`)) {
-      const name = trimmed.match(DECLARATION_HEAD)?.[1];
+    const keyword = [DECLARATION_KEYWORD, FOREIGN_KEYWORD].find((k) => trimmed === k || trimmed.startsWith(`${k} `) || trimmed.startsWith(`${k}\t`));
+    if (keyword !== undefined) {
+      const name = keyword === DECLARATION_KEYWORD ? trimmed.match(DECLARATION_HEAD)?.[1] : trimmed.match(FOREIGN_HEAD)?.[1]?.replace(/\s+/g, " ");
       if (name === undefined) {
-        fail(CODES.MALFORMED_DECLARATION, `a type declaration is written "${DECLARATION_KEYWORD} 이름 = …"`, lineSpan(lineIndex, text));
+        fail(
+          CODES.MALFORMED_DECLARATION,
+          keyword === DECLARATION_KEYWORD ? `a type declaration is written "${DECLARATION_KEYWORD} 이름 = …"` : `a foreign declaration is written "${FOREIGN_KEYWORD} 라이브러리 이름 (…) → 타입 = symbol"`,
+          lineSpan(lineIndex, text),
+        );
       }
       const declaration: DeclarationAst = {
         name,

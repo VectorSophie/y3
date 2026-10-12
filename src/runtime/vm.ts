@@ -93,6 +93,8 @@ export function runExecutable(exe: Executable, program: CompiledProgram, manifes
         return write(o.dst, concrete(ops.order(o.order, concreteOf(o.a), concreteOf(o.b))));
       case "builtin":
         return write(o.dst, callBuiltin(env, o.callee, o.args.map(read), o.types));
+      case "foreign":
+        return write(o.dst, concrete(env.foreign(o.callee, o.args.map(concreteOf))));
       case "construct":
         return write(o.dst, concrete(ops.construct(o.type, o.variant, o.fields.map(concreteOf))));
       case "field":

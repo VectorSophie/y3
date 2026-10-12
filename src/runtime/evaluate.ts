@@ -5,6 +5,7 @@ import { RuntimeFault } from "../semantics/fault";
 import { numericType, order, type ArithOp, type OrderOp } from "../semantics/numeric";
 import type { NumericName, Type } from "../types/types";
 import type { SymbolicTerm } from "../temporal/terms";
+import { foreignLabel } from "./ffi";
 
 // Evaluation of typed IR expressions. A value is concrete, or (for bigint and Text only)
 // a symbolic term the temporal store will settle later. Everything that touches nouns,
@@ -22,6 +23,8 @@ export interface EvalEnv {
   output(value: Value, newline: boolean): void;
   // Any other effect, with concrete arguments, through the host.
   effect(target: Callable & { kind: "effect" }, args: readonly ConcreteValue[], types: CallTypes): ConcreteValue;
+  // A call across the FFI boundary, with concrete arguments (docs/v2-ffi.md).
+  foreign(id: string, args: readonly ConcreteValue[]): ConcreteValue;
   // A value needed now: concrete, or the environment stops (it throws).
   now(value: Value, purpose: string): ConcreteValue;
 }
@@ -185,6 +188,8 @@ export function evaluate(e: Expr, env: EvalEnv, locals: ReadonlyMap<string, Conc
       return concrete(ops.not(needed(e.operand, "this negation")));
     case "Call":
       return callBuiltin(env, e.callee, e.args.map(sub), { args: e.args.map((a) => a.type), result: e.type });
+    case "ForeignCall":
+      return concrete(env.foreign(e.foreign, e.args.map((a) => needed(a, foreignLabel(e.foreign)))));
     case "Construct":
       return concrete(ops.construct(e.typeName, e.variant, e.args.map((arg) => needed(arg, "a data value"))));
     case "Field":

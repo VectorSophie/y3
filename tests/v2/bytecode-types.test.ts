@@ -22,7 +22,7 @@ const refuse = (m: Mutable, message: RegExp) => {
   expect(() => {
     const loaded = loadBytecode(m as unknown as BytecodeModule);
     ran = true;
-    runExecutable(loaded.executable, loaded.program, { name: null, start: m.start, maxSteps: 100, imports: new Map(), test: null }, { host: memoryHost() });
+    runExecutable(loaded.executable, loaded.program, { name: null, start: m.start, maxSteps: 100, imports: new Map(), foreign: new Map(), test: null }, { host: memoryHost() });
   }).toThrow(message);
   expect(ran, "refused before execution").toBe(false);
 };
@@ -127,7 +127,7 @@ describe("constant representation", () => {
     expect(() => loadBytecode(m as unknown as BytecodeModule)).toThrow(/0.1 is not a binary32 value/);
     m.constants[i] = { float: Math.fround(0.1), width: 32 } as never;
     const loaded = loadBytecode(m as unknown as BytecodeModule);
-    const r = runExecutable(loaded.executable, loaded.program, { name: null, start: m.start, maxSteps: 100, imports: new Map(), test: null }, { host: memoryHost() });
+    const r = runExecutable(loaded.executable, loaded.program, { name: null, start: m.start, maxSteps: 100, imports: new Map(), foreign: new Map(), test: null }, { host: memoryHost() });
     expect(r.output).toEqual(["0.1"]);
   });
 

@@ -46,6 +46,8 @@ export function formatExpr(e: Expr, nouns: ReadonlyMap<number, string>): string 
         return `Not(${sub(e.operand)})`;
       case "Call":
         return `Call ${e.callee}(${e.args.map(sub).join(", ")})`;
+      case "ForeignCall":
+        return `ForeignCall ${e.foreign}(${e.args.map(sub).join(", ")})`;
       case "Construct":
         return `${e.variant ?? e.typeName}(${e.args.map(sub).join(", ")})`;
       case "Field":

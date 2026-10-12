@@ -1,3 +1,4 @@
+import { ForeignRuntime, foreignLabel } from "./ffi";
 import type { Coordinate, Pose } from "../space/manifest";
 import type { EffectContext, HostEvent } from "../ir/callables";
 import { memoryHost, type Capability, type Host } from "../stdlib/host";
@@ -199,6 +200,7 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
   const host = options.host ?? memoryHost();
   const events: HostEvent[] = [];
   const effectContext: EffectContext = { host, files: new Map() };
+  const foreignCalls = new ForeignRuntime(program.libraries, program.foreign, host.loadLibrary?.bind(host));
   // Commits every write up to the first one whose value is not yet known.
   const commit = (all = false) => {
     while (committed < writes.length) {
@@ -543,6 +545,17 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
         denied: target.denied,
         perform: () => target.perform(args, effectContext, types),
       }),
+    foreign: (id, args) => {
+      const decl = program.foreign.get(id);
+      if (!decl) throw new RuntimeFault(`no foreign function '${id}'`);
+      const perform = () => foreignCalls.call(id, args);
+      // 순수 (pure), by the programmer's word: no barrier, no event, nothing to replay.
+      if (decl.pure) {
+        if (host.capabilities?.ffi === false) throw new RuntimeFault(`${foreignLabel(id)} needs the 'ffi' capability, which the host denies`);
+        return perform();
+      }
+      return external({ source: `foreign.${id}`, label: foreignLabel(id), capability: "ffi", kind: "foreign", args, redact: false, perform });
+    },
     now: (value, purpose) => needNow([value], purpose)[0] as ConcreteValue,
   };
 

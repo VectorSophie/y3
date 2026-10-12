@@ -65,6 +65,7 @@ export type ModuleScope = {
   readonly planes: ReadonlyMap<string, PlaneId>;
   readonly constructors: ReadonlyMap<string, Constructor>;
   readonly imports: ReadonlyMap<string, ModuleScope>;
+  readonly foreign: ReadonlyMap<string, ReadonlyMap<string, string>>; // library alias → name → foreign id
 };
 
 // Every constructor of the built-in sum and record types (Some, Ok, NotFound, FileInfo, …).
@@ -161,13 +162,15 @@ export function elaborate(
   // Whether a callee names something here: a callable plane, a constructor or a
   // built-in, under its namespace if it has one.
   const known = (namespace: string) =>
-    namespace === ARRAY_NAMESPACE || scope.imports.has(namespace) || resolveCallable(namespace, "").kind !== "no-namespace";
+    namespace === ARRAY_NAMESPACE || scope.imports.has(namespace) || scope.foreign.has(namespace) || resolveCallable(namespace, "").kind !== "no-namespace";
   const resolves = ([first, second]: readonly string[]): boolean => {
     const name = first ?? "";
     if (second === undefined) return scope.planes.has(name) || constructorIn(scope, name) !== null || name === ARRAY_NAMESPACE;
     if (name === ARRAY_NAMESPACE) return second === "길이" || second === "자르기";
     const imported = scope.imports.get(name);
     if (imported) return imported.planes.has(second) || imported.constructors.has(second);
+    const library = scope.foreign.get(name);
+    if (library) return library.has(second);
     return resolveCallable(name, second).kind === "found";
   };
   // Which reading of a call head to take. The namespaced reading wins when it resolves.
@@ -229,6 +232,12 @@ export function elaborate(
       const ctor = imported.constructors.get(second);
       if (ctor) return construct(ctor, ordered(ctor, c));
       return unknown(`module '${namespace}' has no callable plane or constructor '${second}'`);
+    }
+    const library = scope.foreign.get(namespace);
+    if (library) {
+      const id = library.get(second);
+      if (!id) return unknown(`foreign library '${namespace}' has no 외부 declaration '${second}'; it has ${[...library.keys()].join(", ")}`);
+      return typed({ node: "ForeignCall", foreign: id, args: args() });
     }
     const resolution = resolveCallable(namespace, second);
     if (resolution.kind === "no-namespace") {

@@ -69,8 +69,11 @@ describe("bytecode verifier", () => {
   });
 
   it("refuses another bytecode version, cleanly", () => {
-    const text = writeArtifact(base).replace(/^Y3BC 1/, "Y3BC 2");
-    expect(() => readArtifact(text)).toThrow(/bytecode version 2 is not supported: this toolchain reads version 1/);
+    const text = writeArtifact(base).replace(/^Y3BC 2/, "Y3BC 3");
+    expect(() => readArtifact(text)).toThrow(/bytecode version 3 is not supported: this toolchain reads version 2/);
+    // Y3BC 1 was released with M8: it is refused, never reinterpreted under version 2 rules.
+    const v1 = writeArtifact({ ...base, version: 1 }).replace(/^Y3BC 2/, "Y3BC 1");
+    expect(() => readArtifact(v1)).toThrow(/bytecode version 1 is not supported: this toolchain reads version 2; rebuild from source/);
     expect(() => moduleOf("hello")).toThrow(BytecodeError);
   });
 

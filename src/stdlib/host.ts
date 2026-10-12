@@ -28,6 +28,9 @@ export interface Host {
   // nanoseconds from an arbitrary origin.
   nowMillis(): bigint;
   monotonicNanos(): bigint;
+  // Foreign libraries (docs/v2-ffi.md): a library's bytes by its [foreign] path, or null.
+  // A host without it cannot run foreign calls.
+  loadLibrary?(path: string): Uint8Array | null;
 }
 
 // Reads lines and tokens from text that arrives in chunks (all at once, or as the
@@ -71,7 +74,7 @@ export class InputReader {
 // A host with no outside world: stdin from a string, files in a map, a fixed clock.
 export type MemoryHost = Host & { readonly stdout: string[]; readonly files: Map<string, Uint8Array<ArrayBufferLike>> };
 
-export function memoryHost(options: { stdin?: string; files?: Record<string, string>; now?: bigint; deny?: readonly Capability[] } = {}): MemoryHost {
+export function memoryHost(options: { stdin?: string; files?: Record<string, string>; now?: bigint; deny?: readonly Capability[]; libraries?: Record<string, Uint8Array> } = {}): MemoryHost {
   let stdin: string | null = options.stdin ?? "";
   const reader = new InputReader(() => {
     const chunk = stdin;
@@ -85,6 +88,7 @@ export function memoryHost(options: { stdin?: string; files?: Record<string, str
   const missing = (path: string) => ({ ok: false, kind: "NotFound", message: `no such file: ${path}` }) as const;
   return {
     capabilities: Object.fromEntries((options.deny ?? []).map((c) => [c, false])),
+    loadLibrary: (path) => options.libraries?.[path] ?? null,
     stdout,
     files,
     write: (text) => stdout.push(text),

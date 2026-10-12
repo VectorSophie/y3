@@ -1,4 +1,4 @@
-import { DeclarationError, parseSignature, parseTypeDeclaration, type TypeAst } from "../language/declarations";
+import { DeclarationError, FOREIGN_KEYWORD, parseForeignDeclaration, parseSignature, parseTypeDeclaration, type TypeAst } from "../language/declarations";
 import { parseSentence } from "../language/sentence-parser";
 import { formatFloat } from "../semantics/values";
 
@@ -13,6 +13,13 @@ const typeText = (t: TypeAst): string =>
 // "자료 점 = { 가로: i64, 세로: i64 }", "자료 모양<T> = 원(T) | 빈것".
 export function canonicalDeclaration(text: string): string {
   try {
+    if (text.startsWith(`${FOREIGN_KEYWORD} `)) {
+      // 외부 씨 더하기 (a: i32, b: i32) → i32 = add 순수
+      const f = parseForeignDeclaration(text);
+      const params = f.params.map((p) => `${p.name}: ${p.out ? "출력 " : ""}${typeText(p.type)}`).join(", ");
+      const attrs = [...(f.pure ? ["순수"] : []), ...(f.frees ? ["해제"] : [])];
+      return [`${FOREIGN_KEYWORD} ${f.library} ${f.name} (${params})${f.result ? ` → ${typeText(f.result)}` : ""} = ${f.symbol}`, ...attrs].join(" ");
+    }
     const d = parseTypeDeclaration(text);
     const head = `자료 ${d.name}${d.params.length ? `<${d.params.join(", ")}>` : ""} = `;
     if (d.body.kind === "record") return `${head}{ ${d.body.fields.map((f) => `${f.name}: ${typeText(f.type)}`).join(", ")} }`.replace("{  }", "{}");

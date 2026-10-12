@@ -169,3 +169,47 @@ export function parseTypeDeclaration(text: string): TypeDeclarationAst {
     return { name, params, body: { kind: "sum", variants } };
   });
 }
+
+// 외부 declarations (docs/v2-ffi.md): one exported function of a foreign library.
+//
+//   foreign = "외부" IDENT IDENT "(" [ fparam { "," fparam } ] ")" [ arrow type ] "=" IDENT { attr }
+//   fparam  = IDENT ":" [ "출력" ] type                (* 출력: an out-buffer *)
+//   attr    = "순수" | "해제"                           (* pure; frees its pointer *)
+export type ForeignDeclarationAst = {
+  readonly library: string;
+  readonly name: string;
+  readonly params: readonly { readonly name: string; readonly out: boolean; readonly type: TypeAst }[];
+  readonly result: TypeAst | null;
+  readonly symbol: string;
+  readonly pure: boolean;
+  readonly frees: boolean;
+};
+
+export const FOREIGN_KEYWORD = "외부";
+
+export function parseForeignDeclaration(text: string): ForeignDeclarationAst {
+  return whole(text, (t) => {
+    t.expect(FOREIGN_KEYWORD);
+    const library = t.ident("the library's alias");
+    const name = t.ident("the function's name");
+    t.expect("(");
+    const params = list(t, ")", () => {
+      const pname = t.ident("a parameter name");
+      t.expect(":");
+      const out = t.accept("출력");
+      return { name: pname, out, type: type(t) };
+    });
+    const result = t.accept("→") ? type(t) : null;
+    t.expect("=");
+    const symbol = t.ident("the exported symbol");
+    let pure = false;
+    let frees = false;
+    while (t.peek() !== undefined) {
+      const attr = t.next();
+      if (attr === "순수" && !pure) pure = true;
+      else if (attr === "해제" && !frees) frees = true;
+      else throw new DeclarationError(`'${attr}' is not 순수 or 해제, or is written twice`);
+    }
+    return { library, name, params, result, symbol, pure, frees };
+  });
+}

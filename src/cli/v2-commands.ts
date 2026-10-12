@@ -17,7 +17,7 @@ import type { CompiledProgram } from "../ir/program";
 import { packageResolver, PackageError, writeLock } from "./packages";
 import { documentModule, documentStandardLibrary, formatDoc } from "../tools/doc";
 import { formatProgramTrace } from "../runtime/program-trace";
-import { nodeHost } from "./node-host";
+import { libraryLoader, nodeHost } from "./node-host";
 import { formatCompiledIr } from "../ir/print";
 import { describeProgramOutcome, PROGRAM_EXIT_CODES } from "../runtime/program-outcome";
 import { packDocument, unpackDocument, type FileMap } from "../container/pack";
@@ -60,7 +60,7 @@ function compileOrExit(filePath: string, source?: string, resolver: ModuleResolv
   if (!space || !manifest) process.exit(1);
   let compiled: ReturnType<typeof compileProgram>;
   try {
-    compiled = compileProgram(ast, space, { path: relative(".", resolve(filePath)), resolve: resolver });
+    compiled = compileProgram(ast, space, { path: relative(".", resolve(filePath)), resolve: resolver, libraries: libraryLoader(dirname(resolve(filePath))) });
   } catch (error) {
     if (error instanceof PackageError) fatal(`${filePath}: ${error.message}`);
     throw error;
@@ -85,7 +85,7 @@ export type RunV2Options = { maxSteps?: number; input?: string; trace: boolean; 
 
 export function runV2(filePath: string, source: string, options: RunV2Options): void {
   // Output is written as the program commits it; a trace prints the run instead.
-  const host = nodeHost({ stdin: options.input, write: options.trace ? () => {} : undefined });
+  const host = nodeHost({ stdin: options.input, write: options.trace ? () => {} : undefined, root: dirname(resolve(filePath)) });
   // Every run has its artifact: the bytecode `y3 build` would write. Its hash is the
   // program's identity for replay (docs/v2-replay.md).
   let artifact: string;
@@ -220,7 +220,7 @@ export function registerV2Commands(cli: Command): void {
         const test = loaded.manifest?.test;
         if (!test) continue;
         const { program, manifest } = compileOrExit(file, source);
-        const host = nodeHost({ stdin: test.stdin, write: () => {} });
+        const host = nodeHost({ stdin: test.stdin, write: () => {}, root: dirname(resolve(file)) });
         const result =
           options.engine === "hir" ? runProgram(program, manifest, { host }) : (() => {
             const l = executableFor(program, manifest, manifest.name ?? basename(file, ".y3"));

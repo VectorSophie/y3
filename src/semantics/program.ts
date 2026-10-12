@@ -1,6 +1,9 @@
 import type { DefinitionAst, DocumentAst, InlinePlaneAst, Span } from "../language/ast";
 import type { Diagnostic } from "../language/diagnostics";
-import { DeclarationError, parseSignature, parseTypeDeclaration, type TypeAst } from "../language/declarations";
+import { DeclarationError, FOREIGN_KEYWORD, parseForeignDeclaration, parseSignature, parseTypeDeclaration, type TypeAst } from "../language/declarations";
+import { checkDecl, checkLibrary, FFI_SCALARS, FfiError, type FfiParam, type FfiResult, type FfiScalar, type ForeignDecl, type ForeignId, type ForeignLibrary } from "../runtime/ffi";
+import { resolveCallable } from "../ir/callables";
+import { sha256 } from "../tools/sha256";
 import { parseSentence, RESERVED_WORDS, SENTENCE_CODES } from "../language/sentence-parser";
 import type { NounId, PlaneId, Provenance, Stmt } from "../ir/hir";
 import { coordinateKey, type Body, type CompiledProgram, type Procedure } from "../ir/program";
@@ -43,13 +46,18 @@ export const PROGRAM_CODES = {
   NO_MODULE: "Y3C008",
   IMPORT_CYCLE: "Y3C009",
   BAD_ALIAS: "Y3C010",
+  BAD_FOREIGN: "Y3C012",
 } as const;
 
 // Reads an imported module: the module's source and a canonical path for it (used to
 // load each module once and to detect cycles), or null when there is no such module.
 export type ModuleResolver = (path: string, from: string | null) => { path: string; source: string } | null;
 
-export type CompileOptions = { readonly resolve?: ModuleResolver; readonly path?: string };
+// Reads a foreign library's bytes, by its [foreign] path relative to the program; null when
+// there is no such library (or the toolchain cannot load libraries, as in a browser).
+export type LibraryLoader = (path: string) => Uint8Array | null;
+
+export type CompileOptions = { readonly resolve?: ModuleResolver; readonly path?: string; readonly libraries?: LibraryLoader };
 
 const NOWHERE: Span = { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } };
 const NOUN_PATTERN = /^[\p{L}_][\p{L}\p{N}_]*$/u;
@@ -72,7 +80,7 @@ type Module = {
   readonly key: string;
   readonly path: string | null;
   readonly ast: DocumentAst;
-  readonly scope: ModuleScope & { planes: Map<string, PlaneId>; constructors: Map<string, Constructor>; imports: Map<string, ModuleScope> };
+  readonly scope: ModuleScope & { planes: Map<string, PlaneId>; constructors: Map<string, Constructor>; imports: Map<string, ModuleScope>; foreign: Map<string, Map<string, ForeignId>> };
   readonly types: Map<string, string>; // the module's own type names → internal names
 };
 
@@ -108,7 +116,7 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
       key,
       path,
       ast,
-      scope: { key, planes: new Map(), constructors: new Map(), imports: new Map() },
+      scope: { key, planes: new Map(), constructors: new Map(), imports: new Map(), foreign: new Map() },
       types: new Map(),
     };
     const frontSpan = ast.frontMatter?.span ?? NOWHERE;
@@ -148,6 +156,7 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
     loading.pop();
     declareTypes(module);
     declarePlanes(module);
+    declareForeign(module, manifest?.foreign ?? new Map(), frontSpan);
     modules.set(path ?? "", module);
     return module;
   };
@@ -184,7 +193,7 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
   };
 
   const declareTypes = (module: Module) => {
-    const parsed = (module.ast.appendix?.declarations ?? []).flatMap((d) => {
+    const parsed = (module.ast.appendix?.declarations ?? []).filter((d) => !isForeign(d.text)).flatMap((d) => {
       try {
         return [{ d, decl: parseTypeDeclaration(d.text) }];
       } catch (e) {
@@ -267,7 +276,66 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
     }
   };
 
+  // 외부 declarations: the unsafe boundary (docs/v2-ffi.md). Each library is read now, so
+  // its hash is pinned in the program and every declaration is checked against the
+  // library's real exports before anything runs.
+  const foreign = new Map<ForeignId, ForeignDecl>();
+  const libraries = new Map<string, ForeignLibrary>();
+  const declareForeign = (module: Module, table: ReadonlyMap<string, string>, frontSpan: Span) => {
+    const decls = (module.ast.appendix?.declarations ?? []).filter((d) => isForeign(d.text));
+    if (module.key !== "main") {
+      if (decls.length > 0 || table.size > 0) error(module, PROGRAM_CODES.BAD_FOREIGN, decls[0]?.span ?? frontSpan, "only the program's own module declares foreign libraries and 외부 functions");
+      return;
+    }
+    const byLibrary = new Map<string, ForeignDecl[]>();
+    for (const d of decls) {
+      try {
+        const ast = parseForeignDeclaration(d.text);
+        const path = table.get(ast.library);
+        if (path === undefined) throw new FfiError(`'${ast.library}' is not a foreign library: add it to the manifest's [foreign] table`);
+        const decl: ForeignDecl = {
+          id: `${ast.library}.${ast.name}`,
+          library: ast.library,
+          name: ast.name,
+          symbol: ast.symbol,
+          params: ast.params.map((p) => ffiParam(p.type, p.out)),
+          result: ffiResult(ast.result),
+          pure: ast.pure,
+          frees: ast.frees,
+        };
+        checkDecl(decl);
+        if (foreign.has(decl.id)) throw new FfiError(`'${ast.library} ${ast.name}' is declared twice`);
+        foreign.set(decl.id, decl);
+        const names = (module.scope.foreign.get(ast.library) as Map<string, ForeignId> | undefined) ?? new Map<string, ForeignId>();
+        module.scope.foreign.set(ast.library, names.set(ast.name, decl.id));
+        byLibrary.set(ast.library, [...(byLibrary.get(ast.library) ?? []), decl]);
+      } catch (e) {
+        if (!(e instanceof DeclarationError) && !(e instanceof FfiError)) throw e;
+        error(module, PROGRAM_CODES.BAD_FOREIGN, d.span, `[${d.text}] ${e.message}`);
+      }
+    }
+    for (const [alias, path] of table) {
+      if (!NOUN_PATTERN.test(alias) || RESERVED_WORDS.has(alias) || STD_NAMESPACES.has(alias) || module.scope.imports.has(alias) || resolveCallable(alias, "").kind !== "no-namespace") {
+        error(module, PROGRAM_CODES.BAD_ALIAS, frontSpan, `'${alias}' cannot name a foreign library: it is reserved, or already names a module or namespace`);
+        continue;
+      }
+      const bytes = options.libraries?.(path) ?? null;
+      if (!bytes) {
+        error(module, PROGRAM_CODES.BAD_FOREIGN, frontSpan, `cannot load foreign library '${alias}' (${path})`);
+        continue;
+      }
+      try {
+        checkLibrary(bytes, alias, byLibrary.get(alias) ?? []);
+        libraries.set(alias, { alias, path, sha256: sha256(bytes) });
+      } catch (e) {
+        if (!(e instanceof FfiError)) throw e;
+        error(module, PROGRAM_CODES.BAD_FOREIGN, frontSpan, e.message);
+      }
+    }
+  };
+
   const context = (results: readonly Type[] | null): BodyContext => ({
+    foreign,
     planes: new Map([...signatures].map(([id, s]) => [id, { name: s.name, params: s.params.map((p) => p.type), results: s.results }])),
     results,
   });
@@ -393,7 +461,41 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
   }
   const builtin = new Set(new TypeTable().names());
   const types = table.names().filter((n) => !builtin.has(n)).map((n) => table.get(n) as TypeDef);
-  return { program: { space: main.space, cells: main.cells, nouns: main.nouns, procedures, types }, diagnostics };
+  return { program: { space: main.space, cells: main.cells, nouns: main.nouns, procedures, types, foreign, libraries }, diagnostics };
+}
+
+const isForeign = (text: string) => text === FOREIGN_KEYWORD || text.startsWith(`${FOREIGN_KEYWORD} `);
+
+// What an FFI type may be (docs/v2-ffi.md § types): by-value scalars, Text and byte
+// buffers (borrowed), Foreign pointers, and out-buffers.
+function ffiParam(t: TypeAst, out: boolean): FfiParam {
+  const u8 = (e: TypeAst) => e.kind === "name" && e.path.length === 1 && e.path[0] === "u8" && e.args.length === 0;
+  if (out) {
+    if (t.kind === "array" && u8(t.element)) return { kind: "out", length: t.length };
+    throw new FfiError("an out-buffer (출력) is a [u8; N]");
+  }
+  if (t.kind === "array" && u8(t.element)) return { kind: "bytes", length: t.length };
+  if (t.kind === "slice" && u8(t.element)) return { kind: "bytes", length: null };
+  if (t.kind === "name" && t.path.length === 1 && t.args.length === 0) {
+    const name = t.path[0] as string;
+    if ((FFI_SCALARS as readonly string[]).includes(name)) return { kind: "scalar", type: name as FfiScalar };
+    if (name === "Text") return { kind: "text" };
+    if (name === "Foreign") return { kind: "handle" };
+    if (name === "i128" || name === "u128") throw new FfiError(`${name} does not cross the FFI boundary: C compilers disagree on how to pass it`);
+  }
+  throw new FfiError(`this type does not cross the FFI boundary; foreign functions take i8…u64, f32, f64, Bool, Text, [u8; N], []u8 and Foreign`);
+}
+
+function ffiResult(t: TypeAst | null): FfiResult {
+  if (t === null) return { kind: "unit" };
+  if (t.kind === "name" && t.path.length === 1 && t.path[0] === "Unit") return { kind: "unit" };
+  if (t.kind === "array") {
+    const p = ffiParam(t, false);
+    if (p.kind === "bytes" && p.length !== null) return { kind: "out", length: p.length };
+  }
+  const p = ffiParam(t, false);
+  if (p.kind === "scalar" || p.kind === "handle") return p;
+  throw new FfiError("a foreign function returns a scalar, a Foreign pointer, a [u8; N] out-buffer or nothing; Text and []u8 cannot be returned");
 }
 
 function inSourceOrder(cells: ReadonlyMap<string, Stmt>): Stmt[] {

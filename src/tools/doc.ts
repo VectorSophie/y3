@@ -21,6 +21,7 @@ export type DocModel = {
     readonly source: string;
   }[];
   readonly callables: readonly { readonly name: string; readonly signature: string; readonly params: readonly { readonly name: string; readonly type: string }[]; readonly results: readonly string[]; readonly doc: string }[];
+  readonly foreign: readonly { readonly name: string; readonly source: string; readonly doc: string }[]; // 외부 declarations
   readonly planes: readonly { readonly name: string; readonly doc: string }[]; // floor plans for the volume
   readonly volume: number; // floors in the volume; 0 for a library
 };
@@ -31,7 +32,9 @@ const typeText = (t: TypeAst): string =>
 export function documentModule(ast: DocumentAst, fallbackName: string): DocModel {
   const manifest = interpretManifest(ast.frontMatter?.text ?? null).manifest;
   const doc = (comments: readonly { text: string }[]) => comments.map((c) => c.text.trim()).join("\n");
-  const types = (ast.appendix?.declarations ?? []).map((d) => {
+  const declarations = ast.appendix?.declarations ?? [];
+  const isForeign = (d: { text: string }) => d.text.startsWith("외부 ");
+  const types = declarations.filter((d) => !isForeign(d)).map((d) => {
     try {
       const decl = parseTypeDeclaration(d.text);
       return {
@@ -63,6 +66,7 @@ export function documentModule(ast: DocumentAst, fallbackName: string): DocModel
     imports: [...(manifest?.imports ?? new Map())].map(([alias, from]) => ({ alias, from })),
     types,
     callables,
+    foreign: declarations.filter(isForeign).map((d) => ({ name: d.name, source: d.text, doc: doc(d.comments) })),
     planes: definitions.filter((d) => d.signature === null).map((d) => ({ name: d.name, doc: doc(d.comments) })),
     volume: ast.volume.length,
   };
@@ -79,6 +83,10 @@ export function formatDoc(model: DocModel): string {
   if (model.callables.length) {
     lines.push("", "callable planes");
     for (const c of model.callables) lines.push(`  :${c.name}: ${c.signature}`, ...docLines(c.doc));
+  }
+  if (model.foreign.length) {
+    lines.push("", "foreign functions (unsafe boundary)");
+    for (const f of model.foreign) lines.push(`  ${f.source}`, ...docLines(f.doc));
   }
   if (model.planes.length) {
     lines.push("", "named planes");
