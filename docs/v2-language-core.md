@@ -33,7 +33,7 @@ A signature sits between a plane's name and its `⟦`:
 ```
 ※
 
-:제곱: (수: Int) → Int ⟦
+:제곱: (수: i64) → i64 ⟦
 [곱은 0이다.]
 [번은 0이다.]
 [여기가 처음이다.]
@@ -43,7 +43,7 @@ A signature sits between a plane's name and its `⟦`:
 [곱을 돌려준다.]
 ⟧
 
-:합차: (가: Int, 나: Int) → (Int, Int) ⟦ … ⟧     several results
+:합차: (가: i64, 나: i64) → (i64, i64) ⟦ … ⟧     several results
 :인사: () ⟦ … ⟧                                   no arrow: returns Unit
 ```
 
@@ -130,10 +130,10 @@ Trace lines name the activation: `누적#3(0,4,0)`.
 Type declarations are one-line `자료` items in the ※ section:
 
 ```
-자료 점 = { 가로: Int, 세로: Int }
-자료 모양 = 원(Int) | 사각(Int, Int) | 빈모양
+자료 점 = { 가로: i64, 세로: i64 }
+자료 모양 = 원(i64) | 사각(i64, i64) | 빈모양
 자료 쌍<A, B> = { 첫: A, 둘: B }
-자료 목록 = 마디(Int, 목록) | 끝마디            recursive types are fine
+자료 목록 = 마디(i64, 목록) | 끝마디            recursive types are fine
 ```
 
 | Sentence | HIR |
@@ -161,7 +161,7 @@ refused), so a word means the same thing wherever it is written.
 [k는 m에 따라: 기하 원(r) → r, 기하 없는모양 → 0]
 ```
 
-- **Patterns:** a wildcard `_`, a binding, a literal (Int, Text, 참/거짓), a variant
+- **Patterns:** a wildcard `_`, a binding, a literal (i64, Text, 참/거짓), a variant
   with sub-patterns, or a record with positional sub-patterns.
 - **Exhaustive where it can be known** (`Y3Y005`). The check looks through nesting, so
   `Some(참) | Some(거짓) | None` covers `Option<Bool>`. A missing case is named
@@ -177,7 +177,7 @@ There is no null and no exception for ordinary failure. A plane that can fail re
 `Result<T, E>` or `Option<T>`, and the caller matches it:
 
 ```
-:나눔: (수: Int, 나눌수: Int) → Result<Int, Text> ⟦
+:나눔: (수: i64, 나눌수: i64) → Result<i64, Text> ⟦
 [r은 Ok: 수]
 [나눌수가 0이면 r은 Err: "0으로 나눌 수 없다"]
 [r을 돌려준다.]
@@ -194,11 +194,11 @@ A `FAULT` is a broken program (an index out of range), not a recoverable error.
 
 | Sentence | Type | Meaning |
 |---|---|---|
-| `[수들은 배열: 1, 2, 3]` | `[Int; 3]` | an array owns its elements |
-| `수들의 0번`, `수들의 i번` | `Int` | an element (zero-based) |
+| `[수들은 배열: 1, 2, 3]` | `[i64; 3]` | an array owns its elements |
+| `수들의 0번`, `수들의 i번` | `i64` | an element (zero-based) |
 | `[수들의 1번은 99이다.]` | | a new array with one element replaced |
-| `[가운데는 배열 자르기: 수들, 1, 3]` | `[]Int` | a slice: a view of elements [1, 3) |
-| `[n은 배열 길이: 가운데]` | `Int` | length of an array or a slice |
+| `[가운데는 배열 자르기: 수들, 1, 3]` | `[]i64` | a slice: a view of elements [1, 3) |
+| `[n은 배열 길이: 가운데]` | `i64` | length of an array or a slice |
 
 - **An array owns its storage. A slice is a view of storage.** Storage is never
   mutated: writing an element makes a new array, so a slice keeps seeing the array
@@ -208,7 +208,7 @@ A `FAULT` is a broken program (an index out of range), not a recoverable error.
   is a question for M7's memory model.
 - Indexes and slice bounds are checked when the program runs. Out of range is a
   `FAULT`, never a wrapped value.
-- The element type and `N` are part of the type: `[Int; 3]` and `[Int; 4]` differ.
+- The element type and `N` are part of the type: `[i64; 3]` and `[i64; 4]` differ.
 - Arrays pass to callable planes by value.
 
 ## Modules
@@ -259,7 +259,7 @@ so formatting and the order of imports never change it.
 
 Records, variants and arrays are built from concrete values. Building one from an open
 temporal symbol needs that symbol's value now, so the run stops `UNRESOLVED`, exactly
-like a branch. Temporal values remain Int or Text (`Y3Y004`). Symbolic data is not
+like a branch. Temporal values remain i64 or Text (`Y3Y004`). Symbolic data is not
 planned: the solver stays `A x = b` over integers, and text unification.
 
 ## Diagnostics added in M6

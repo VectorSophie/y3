@@ -524,3 +524,21 @@ describe("taking values out of Option and Result", () => {
     expect(outcome(["o는 None이다.", "v는 선택 꺼내기: o", "끝이다."])).toBe("FAULT: '선택 꺼내기' found None");
   });
 });
+
+describe("documentation", () => {
+  it("lists every built-in callable, by source spelling and id", async () => {
+    const { CALLABLES } = await import("../../src/v2");
+    const { readRepoFile } = await import("./helpers");
+    const doc = readRepoFile("docs/v2-standard-library.md");
+    for (const c of CALLABLES) {
+      expect(doc, c.id).toContain(`\`${c.namespace} ${c.name}\` | \`${c.id}\``);
+    }
+  });
+});
+
+describe("text literal escapes", () => {
+  it("are \\n, \\t, \\\\ and \\\" in Text, as in runes; any other is refused", () => {
+    expect(run(['s는 "a\\nb\\t\\"c\\"\\\\"이다.', "s를 말한다.", "끝이다."]).host.stdout.join("")).toBe('a\nb\t"c"\\\n');
+    expect(errors(['s는 "a\\qb"이다.', "끝이다."])).toEqual([`Y3G003 [s는 "a\\qb"이다.] '\\q' is not an escape: use \\n, \\t, \\\\ or \\"`]);
+  });
+});

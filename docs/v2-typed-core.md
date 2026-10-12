@@ -1,5 +1,9 @@
 # Y3 v2: the typed semantic core (M5)
 
+> **Since M7** `Int` is gone: integer literals are `i64` by default, temporal integers
+> are `bigint`, and a temporal value is `bigint` or `Text`. See
+> `docs/v2-runtime-model.md`. This document describes M5 as it was built.
+
 M5 puts a typed semantic layer between Korean and execution. This layer is Y3's
 equivalent of a compiler's HIR. Every later subsystem targets it: callable planes,
 records, modules, a bytecode. The runtime no longer sees sentences.

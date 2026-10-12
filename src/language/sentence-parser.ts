@@ -218,8 +218,15 @@ function lintParticle(stem: string, particle: string, pair: ParticlePair | null,
   }
 }
 
+// Escapes in a text literal: \n, \t, \\ and \" (the same as a rune's, with \" for \').
+const TEXT_ESCAPES: Readonly<Record<string, string>> = { n: "\n", t: "\t", "\\": "\\", '"': '"' };
+
 function unquote(literal: string): string {
-  return literal.slice(1, -1).replace(/\\(.)/g, "$1");
+  return literal.slice(1, -1).replace(/\\(.)/gu, (_, c: string) => {
+    const escaped = TEXT_ESCAPES[c];
+    if (escaped === undefined) fail(SENTENCE_CODES.BAD_PHRASE, `'\\${c}' is not an escape: use \\n, \\t, \\\\ or \\"`);
+    return escaped;
+  });
 }
 
 const ANCHORED = /^(처음|끝)의 (.+)$/u;

@@ -133,3 +133,154 @@ Consequences:
   `i64`) is a check between two concrete values. It never reaches the solver.
 - Programs from M3–M6 keep their traces: their temporal nouns were already used only
   with literals and with each other, and those now infer `bigint`.
+
+## 2. Text and runes
+
+- **`Text`** is a sequence of Unicode scalar values (U+0000–U+10FFFF, no surrogates),
+  stored as UTF-8. Source files, stdin and files are decoded as UTF-8. A file that is
+  not valid UTF-8 is an `Err(Other(…))` when read as `Text`, never a silently repaired
+  string. (Interactive stdin replaces invalid bytes with U+FFFD; this is noted as a
+  limit, not a semantic.)
+- **`Rune`** is one scalar value (Go's `rune`, Rust's `char`). It is written `'가'`,
+  `' '`, `'\n'`, `'\t'`, `'\\'` or `'\''`. Runes are ordered by scalar value, and
+  `글 문자: n` makes one from a `u32`. Surrogates and values above U+10FFFF give
+  `None`.
+- **Three different lengths**, never confused:
+
+  | | Counts | `"é😀가"` |
+  |---|---|---|
+  | `글 길이` | runes (scalar values) | 4 |
+  | `글 바이트길이` | UTF-8 bytes | 10 |
+  | `글 글자수` | grapheme clusters (UAX #29, as the host's ICU segments them) | 3 |
+
+- **No direct indexing.** `s의 0번` is refused for `Text`. `글 자르기: s, a, b` takes
+  runes `[a, b)`, and `글 문자들` gives the runes as a `List<Rune>`. A position never
+  counts UTF-16 units or bytes; that would make JavaScript's representation the
+  language's semantics.
+- **Escapes** in a text literal are `\n`, `\t`, `\\` and `\"`; in a rune literal,
+  `\n`, `\t`, `\\` and `\'`. Any other backslash is refused (`Y3G003`). (Before M7 a
+  backslash kept the next character as written, so `"\n"` was `n`; nothing relied on
+  that.)
+- Text equality is scalar-by-scalar. There is no normalisation: `"é"` and
+  `"é"` are different texts. Ordering is not defined on `Text` (compare runes,
+  or keep a `Map`).
+
+## 3. Values
+
+**Value semantics everywhere.** Assigning, passing or storing a value copies it, as
+far as the program can tell. No operation on one name changes what another name holds.
+
+| Category | Values | Model |
+|---|---|---|
+| scalars | integers, floats, `Bool`, `Rune`, `Unit` | immediate |
+| records, variants | `자료` types, `Option`, `Result`, errors | value: a field write builds a new record |
+| arrays `[T; N]` | own their elements | value: an element write builds a new array |
+| slices `[]T` | a **persistent view** of one array version | read-only; see below |
+| `Text`, `List`, `Map`, `Set` | heap-backed | value: every update returns a new collection |
+| `File` | a handle on an outside resource | the one reference: copies name the same open file |
+
+**Slices.** M6 said a slice "views storage". Under value semantics that phrase could
+suggest mutable aliasing, so here it is exactly: storage is never mutated, so a slice is
+a persistent view of the array version it was taken from. Writing the array afterwards
+makes a new version; the slice keeps the old one. Writing through a slice is refused.
+There is no mutable aliasing anywhere in the language, and so no aliasing questions for
+a borrow checker to answer.
+
+**Equality** is structural for all values and IEEE for floats: a record holding a
+NaN is not equal to itself. `File` handles are equal when they are the same handle.
+
+**Keys.** `Map` keys and `Set` elements must be *key types*: integers, `Bool`, `Text`,
+`Rune`, `Unit`, and records and variants made only of those. Their equality is
+reflexive and structural, so a key always finds itself. Floats, arrays, slices,
+collections and files are refused at check (`Y3N002`). Iteration order is insertion
+order.
+
+## 4. Memory
+
+- The runtime is garbage collected. Values are allocated as needed and reclaimed when
+  unreachable. There is no ownership, no borrowing, no `free`, and no observable
+  object identity (except `File` handles).
+- The implementation copies a collection on every update, which is O(n) per update and
+  quadratic for a growing collection. This is a performance ceiling, not a semantic:
+  persistent data structures would keep the same semantics.
+- **Heap lifetime is not temporal lifetime.** A temporal symbol (α, β, ε) is not a
+  pointer and owns no storage. It lives in the temporal store from its birth to the end
+  of the run, whatever frames come and go, and it may be determined after every value
+  that mentioned it is gone. A determined symbol is a number or a text, with no
+  identity: two symbols determined to 3 are just 3.
+
+## 5. Errors
+
+| Kind | Mechanism | Examples |
+|---|---|---|
+| **ordinary, recoverable** | a value: `Result<T, E>` or `Option<T>`, matched with `에 따라` | a missing file, text that is not a number, an absent map key |
+| **a broken program** | `FAULT`: the run ends at that cell | overflow, division by zero, an index out of range, a failed conversion, `결과 꺼내기` on `Err` |
+| **space** | `VOID`, `STEP_LIMIT` | walking off a plane |
+| **time** | `PARADOX`, `UNRESOLVED`, `AMBIGUOUS` | an inconsistent past |
+
+Nothing converts between the rows. A `Result` never becomes a `FAULT` unless the
+program asks for it with `꺼내기`. A `FAULT` cannot be caught. The standard library's
+error types are ordinary data: `FsError` and `ParseError` (§6 of the library document).
+
+## 6. Effects
+
+**Pure values** are everything except effects. **Effects** reach outside the program:
+stdout, stdin, files and clocks. Every effect goes through the runtime's `Host`; the
+interpreter never touches the outside world itself.
+
+| Effect | Commits | Arguments |
+|---|---|---|
+| stdout (`출력`, `줄출력`, `말한다`) | in program order, as soon as every earlier write is known | may be symbolic: the write is **held** until its value is determined, and holds every write after it |
+| stdin, files, clocks | when the cell runs | must be concrete now; a symbolic argument is `UNRESOLVED` at the boundary |
+
+- **Output is held, not rewritten.** A held write has no text yet. It is written once,
+  when its value becomes known, or as `?` if the run ends first. Output is never taken
+  back, and the stdout stream is never reordered. Holding stdout can delay it past a
+  later effect (a file write or an input prompt): that is the runtime's buffering rule,
+  not a change to what was written.
+- **Input is grounded.** What stdin, a file or a clock returns is a concrete value. It
+  is recorded as an event (`ProgramResult.events`: step, source, value) for later
+  replay, and it can never become a temporal symbol. Clock readings are `i64`; input is
+  `Text`. A past statement about an input value can only check it: a mismatch is a
+  `PARADOX`, never a rewrite of what was read.
+- **The outside world is not retroactive.** No constraint, however late, changes a
+  committed effect.
+
+## 7. Audit (M7)
+
+1. **The numeric model** is §1: ten fixed-width integer types, `bigint`, `f32` and
+   `f64`. Literals default to `i64`/`f64` or take their type from context. There is no
+   implicit conversion. Arithmetic is checked (`FAULT`, never wrapping), and floats are
+   IEEE 754.
+2. **Temporal symbolic values** are `bigint` and `Text` only (§1.8), enforced at check
+   time (`Y3Y004`) and asserted at run time.
+3. **Overflow is defined by operation and type** in one module (`semantics/numeric`).
+   The interpreter, the standard library and conversions all call it, and a bytecode
+   backend must call it or match it. Any backend has to fault at the same step.
+4. **JavaScript leaking into semantics:**
+   - Integers are JS `bigint`, so the runtime never meets JS number arithmetic.
+   - Floats are JS numbers, which are IEEE binary64 by specification, with `f32`
+     rounding explicit.
+   - Text positions count scalars. JS UTF-16 indexing appears nowhere in the API.
+   - Float printing is specified (§1.5) rather than inherited.
+   - Grapheme segmentation is delegated to the host's ICU, and documented as such.
+5. **Text Unicode behaviour** is language-defined (§2). Only grapheme segmentation
+   depends on a Unicode table version.
+6. **Slices do not imply mutable aliasing.** They are persistent views (§3).
+7. **Recoverable errors are `Result`/`Option`** throughout the standard library. File
+   failures, parse failures, absent keys and absent input are values. A test plants
+   "file error becomes FAULT" and catches it.
+8. **External effects are separated from temporal constraints** (§6). Effects need
+   concrete arguments except held stdout. Input is recorded and grounded. Clock values
+   are `i64`.
+9. **The standard library uses the user's call and type system.**
+   - Same `Call` HIR node, name resolution, signature instantiation and checking.
+   - One difference: built-ins may have *bounded* type parameters (`T: number`,
+     `K: key`), which a user's callable plane cannot declare yet. Go's `len` and `min`
+     are generic in the same way, before user generics existed.
+10. **No second runtime path.**
+    - `말한다` lowers to `std.io.println`. There is one output path (`writes` →
+      `Host.write`), and the CLI streams through it instead of printing results at the
+      end.
+    - Arithmetic has one implementation (`semantics/numeric`).
+    - A test plants a separate path for `말한다` and catches it (62 tests).

@@ -132,7 +132,7 @@ the cell each statement came from.
 
 ※
 
-:누적: (수: Int) → Int ⟦
+:누적: (수: i64) → i64 ⟦
 [수가 0이면 0을 돌려준다.]
 [작은것은 수이다.]
 [작은것에서 1을 뺀다.]
@@ -144,6 +144,31 @@ the cell each statement came from.
 
 This prints `6`. A symbol can pass through a call still unknown and be determined after
 the call returns: temporal identity is not tied to a frame.
+
+**M7** makes values conventional and explicit (`docs/v2-runtime-model.md`,
+`docs/v2-standard-library.md`):
+- `i8`…`i128`, `u8`…`u128`, `bigint`, `f32`, `f64`, with `i64` as the default
+  integer type;
+- checked arithmetic: overflow is a `FAULT`, never a wrap;
+- no implicit conversions;
+- ordering comparisons on the spatial branch (`[i가 5보다 작으면 끝은 처음이다.]`);
+- Unicode `Text` and `Rune`;
+- records built by field name;
+- value-semantics collections (`List`, `Map`, `Set`);
+- a standard library for io, text, math, files and clocks, with ordinary errors as
+  `Result` values.
+
+Temporal values are `bigint` or `Text`, the integers the solver actually reasons about.
+
+```
+⟦
+[이름은 표준 줄읽기:]
+[글은 이름에 따라: Some(n) → n, None → "아무개"]
+[인사는 표준 형식: "안녕, {}!", 글]
+[인사를 말한다.]
+[끝이다.]
+⟧
+```
 `run` and `trace` choose v1 or v2 from the file: v2 documents contain planes. The
 sections below describe v1, whose examples are in `examples/v1/`; v2 examples are in
 `examples/v2/`.
