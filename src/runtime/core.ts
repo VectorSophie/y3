@@ -272,8 +272,9 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
     let result: ConcreteValue;
     if (replay) {
       const expected = replay.events[replay.next];
-      if (!expected || expected.source !== e.source) {
-        throw new ReplayDivergence(`replay diverged at step ${now}: the program calls ${e.source}, but the recording has ${expected ? expected.source : "nothing more"}`);
+      const args = e.args.map(showValue);
+      if (!expected || expected.source !== e.source || expected.args.join("\u0000") !== args.join("\u0000")) {
+        throw new ReplayDivergence(`replay diverged at step ${now}: the program calls ${e.source}(${args.join(", ")}), but the recording has ${expected ? `${expected.source}(${expected.args.join(", ")})` : "nothing more"}`);
       }
       replay.next += 1;
       result = decodePayload(expected.payload);

@@ -5,6 +5,8 @@ import { loadDocument } from "../container/document";
 import { compileProgram, type ModuleResolver } from "../semantics/program";
 import { runProgram, type ProgramResult } from "../runtime/interpreter";
 import { runExecutable } from "../runtime/vm";
+import { ReplayDivergence, type RunOptions } from "../runtime/core";
+import { readReplay, ReplayError, writeReplay, type Replay } from "../tools/replay";
 import { compileToMir } from "../compiler/compile";
 import { formatCfg } from "../compiler/cfg";
 import { formatMir } from "../compiler/mir";
@@ -79,10 +81,15 @@ function executableFor(program: CompiledProgram, manifest: Manifest, module: str
   return loadBytecode(encodeBytecode(optimizeMir(mir).mir, nodes, program, { module, maxSteps: manifest.maxSteps, start: manifest.start }));
 }
 
-export function runV2(filePath: string, source: string, options: { maxSteps?: number; input?: string; trace: boolean; engine?: Engine }): void {
+export type RunV2Options = { maxSteps?: number; input?: string; trace: boolean; engine?: Engine; record?: string; replay?: string; force?: boolean };
+
+export function runV2(filePath: string, source: string, options: RunV2Options): void {
   // Output is written as the program commits it; a trace prints the run instead.
   const host = nodeHost({ stdin: options.input, write: options.trace ? () => {} : undefined });
-  let result: ProgramResult;
+  // Every run has its artifact: the bytecode `y3 build` would write. Its hash is the
+  // program's identity for replay (docs/v2-replay.md).
+  let artifact: string;
+  let execute: (run: RunOptions) => ProgramResult;
   if (source.startsWith(`${BYTECODE_MAGIC} `)) {
     if (options.engine === "hir") fatal(`${filePath} is bytecode: only the VM runs it`);
     let loaded: Loaded;
@@ -92,19 +99,39 @@ export function runV2(filePath: string, source: string, options: { maxSteps?: nu
       fatal(`${filePath}: ${error instanceof Error ? error.message : String(error)}`);
     }
     const manifest = { ...DEFAULT_MANIFEST, maxSteps: loaded.maxSteps };
-    result = runExecutable(loaded.executable, loaded.program, manifest, { maxSteps: options.maxSteps, host });
+    artifact = source;
+    execute = (run) => runExecutable(loaded.executable, loaded.program, manifest, run);
   } else {
     const { program, manifest } = compileOrExit(filePath, source);
     if (program.space.layers.length === 0) {
       fatal(`${filePath} is a library module: it has callable planes and types but no volume to run`);
     }
+    const { mir, nodes } = compileToMir(program, manifest.start);
+    artifact = writeArtifact(encodeBytecode(optimizeMir(mir).mir, nodes, program, { module: manifest.name ?? basename(filePath, ".y3"), maxSteps: manifest.maxSteps, start: manifest.start }));
     if (options.engine === "hir") {
-      result = runProgram(program, manifest, { maxSteps: options.maxSteps, host });
+      execute = (run) => runProgram(program, manifest, run);
     } else {
-      const loaded = executableFor(program, manifest, manifest.name ?? basename(filePath, ".y3"));
-      result = runExecutable(loaded.executable, loaded.program, manifest, { maxSteps: options.maxSteps, host });
+      const loaded = moduleOf(artifact);
+      execute = (run) => runExecutable(loaded.executable, loaded.program, manifest, run);
     }
   }
+  let replay: Replay | undefined;
+  if (options.replay) {
+    try {
+      replay = readReplay(readFileSync(options.replay, "utf8"), artifact, { force: options.force });
+    } catch (error) {
+      if (error instanceof ReplayError) fatal(`${options.replay}: ${error.message}`);
+      throw error;
+    }
+  }
+  let result: ProgramResult;
+  try {
+    result = execute({ maxSteps: options.maxSteps, host, replay: replay?.events });
+  } catch (error) {
+    if (error instanceof ReplayDivergence) fatal(`${options.replay}: ${error.message}`);
+    throw error;
+  }
+  if (options.record) writeFileSync(options.record, writeReplay(artifact, result.events, host.capabilities));
   if (options.trace) {
     process.stdout.write(formatProgramTrace(result));
   } else if (result.outcome.status !== "HALT") {

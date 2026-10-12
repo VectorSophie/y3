@@ -96,11 +96,15 @@ cli
   .option("-i, --input <values>", "Space/comma separated integer input values")
   .option("--max-steps <count>", "Execution step limit (default: 10000)")
   .option("--engine <engine>", "v2: vm (bytecode VM, default) or hir (the reference interpreter)", "vm")
-  .action((filePath: string, options: { input?: string; maxSteps?: string; engine: string }) => {
+  .option("--record <file>", "v2: record the run's effects to a replay file (Y3REPLAY)")
+  .option("--replay <file>", "v2: replay a recorded run: effects return their recorded results")
+  .option("--force", "v2: replay a recording made for a different program")
+  .action((filePath: string, options: { input?: string; maxSteps?: string; engine: string; record?: string; replay?: string; force?: boolean }) => {
     try {
       const source = readSource(filePath);
       if (looksLikeV2(source) || source.startsWith("Y3BC ")) {
-        runV2(filePath, source, { maxSteps: parseMaxSteps(options.maxSteps), input: options.input, trace: false, engine: engineOf(options.engine) });
+        if (options.record && options.replay) throw new Error("--record and --replay cannot be used together");
+        runV2(filePath, source, { maxSteps: parseMaxSteps(options.maxSteps), input: options.input, trace: false, engine: engineOf(options.engine), record: options.record, replay: options.replay, force: options.force });
         return;
       }
       const program = parseProgram(source);
