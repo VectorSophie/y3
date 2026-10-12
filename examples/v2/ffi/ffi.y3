@@ -1,0 +1,42 @@
++++
+name = "외부호출"
+
+[foreign]
+"씨" = "math.wasm"
+"버" = "buffers.wasm"
+
+[test]
+output = ["42", "1.4142135623730951", "9", "[7, 8, 9, 10]", "2"]
++++
+
+# Foreign calls (docs/v2-ffi.md): two wasm32 C ABI libraries.
+⟦
+[x는 씨 더하기: 40i32, 2i32]
+[x를 말한다.]
+[r은 씨 제곱근: 2.0]
+[r을 말한다.]
+[n은 버 세기: "가나다"]
+[n을 말한다.]
+[b는 버 채우기: 7u8]
+[b를 말한다.]
+[c는 버 새계수기:]
+[a는 버 다음: c]
+[a는 버 다음: c]
+[a를 말한다.]
+[버 해방: c]
+[끝이다.]
+⟧
+
+※
+
+외부 버 다음 (c: Foreign) → i32 = next
+외부 버 새계수기 () → Foreign = new_counter
+# size_t count(const char *s, size_t len): bytes, not characters
+외부 버 세기 (s: Text) → u32 = count 순수
+# void fill(uint8_t first, uint8_t *out, size_t len)
+외부 버 채우기 (n: u8, 버퍼: 출력 [u8; 4]) → [u8; 4] = fill 순수
+외부 버 해방 (c: Foreign) = free_counter 해제
+# int add(int, int)
+외부 씨 더하기 (a: i32, b: i32) → i32 = add 순수
+# double sqrt(double)
+외부 씨 제곱근 (x: f64) → f64 = sqrt 순수

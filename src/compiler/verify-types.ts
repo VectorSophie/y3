@@ -6,6 +6,7 @@ import type { NodeInfo } from "../runtime/vm";
 import type { BodyId } from "./cfg";
 import type { MirBlock, MirOp, Reg } from "./mir";
 import { BytecodeError } from "./bytecode";
+import { y3Signature, type ForeignDecl } from "../runtime/ffi";
 
 // The bytecode type verifier: proves, from the artifact alone, the typed-MIR invariant
 // the VM and the runtime rely on. Every register has one type on every path through a
@@ -26,6 +27,7 @@ export type TypeContext = {
   readonly nounTypes: ReadonlyMap<BodyId, ReadonlyMap<NounId, Type>>;
   readonly procedures: ReadonlyMap<PlaneId, { readonly params: readonly Type[]; readonly results: readonly Type[] }>;
   readonly typedefs: readonly TypeDef[];
+  readonly foreign: ReadonlyMap<string, ForeignDecl>;
 };
 
 export function same(a: Type, b: Type): boolean {
@@ -305,6 +307,14 @@ export function verifyTypes(ctx: TypeContext): void {
             wellFormed(o.types.result, where);
             matchCall(o.callee, o.args.map(type), o.types, where);
             return set(o.dst, o.types.result);
+          case "foreign": {
+            // Exactly the declared FFI types: the declaration, not the instruction, decides.
+            const decl = ctx.foreign.get(o.callee) ?? fail(`no foreign function '${o.callee}'`);
+            const sig = y3Signature(decl);
+            if (sig.params.length !== o.args.length) fail(`'${o.callee}' takes ${sig.params.length} arguments, not ${o.args.length}`);
+            o.args.forEach((r, i) => expect(r, sig.params[i] as Type, `argument ${i + 1} of '${o.callee}'`));
+            return set(o.dst, sig.result);
+          }
           case "construct": {
             wellFormed(o.result, where);
             if (o.result.kind !== "named" || o.result.name !== o.type) fail(`a construction of ${o.type} cannot be a ${show(o.result)}`);

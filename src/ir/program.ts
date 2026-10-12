@@ -2,6 +2,7 @@ import type { Coordinate } from "../space/manifest";
 import type { Space } from "../space/volume";
 import type { Type, TypeDef } from "../types/types";
 import type { Noun, NounId, PlaneId, Stmt } from "./hir";
+import type { ForeignDecl, ForeignId, ForeignLibrary } from "../runtime/ffi";
 
 // A compiled program: the space and, for every non-blank cell, its typed HIR. This is
 // all the runtime receives; how the HIR was produced (from Korean, or built directly)
@@ -28,6 +29,9 @@ export type Procedure = Body & {
 export type CompiledProgram = Body & {
   readonly procedures: ReadonlyMap<PlaneId, Procedure>; // every callable plane reachable from the program
   readonly types: readonly TypeDef[]; // the program's own type declarations (built-in ones are implied)
+  // 외부 declarations and the foreign libraries they use, each pinned by its sha256.
+  readonly foreign: ReadonlyMap<ForeignId, ForeignDecl>;
+  readonly libraries: ReadonlyMap<string, ForeignLibrary>;
 };
 
 export function coordinateKey(at: Coordinate): string {

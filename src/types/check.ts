@@ -1,5 +1,6 @@
 import type { Diagnostic } from "../language/diagnostics";
 import { callable } from "../ir/callables";
+import { y3Signature, type ForeignDecl } from "../runtime/ffi";
 import { templateParts } from "../stdlib/io";
 import type { Expr, Noun, NounId, Pattern, PlaneId, Provenance, Stmt } from "../ir/hir";
 import type { ConcreteValue } from "../semantics/values";
@@ -56,6 +57,7 @@ export type PlaneSignature = { readonly params: readonly Type[]; readonly result
 export type BodyContext = {
   readonly planes: ReadonlyMap<PlaneId, PlaneSignature & { readonly name: string }>;
   readonly results: readonly Type[] | null;
+  readonly foreign?: ReadonlyMap<string, ForeignDecl>; // 외부 declarations
 };
 
 const MAIN_CONTEXT: BodyContext = { planes: new Map(), results: null };
@@ -268,6 +270,20 @@ export class TypeChecker {
         return BOOL;
       case "Call":
         return this.call(e);
+      case "ForeignCall": {
+        // A foreign signature is monomorphic: exactly the declared FFI types.
+        const decl = this.context.foreign?.get(e.foreign);
+        const args = e.args.map((arg) => this.expr(arg));
+        if (!decl) {
+          this.report(TYPE_CODES.UNKNOWN, e.at, `unknown foreign function '${e.foreign}'`);
+          return this.u.fresh();
+        }
+        const sig = y3Signature(decl);
+        const label = `'${decl.library} ${decl.name}'`;
+        if (args.length !== sig.params.length) this.report(TYPE_CODES.ARITY, e.at, `${label} takes ${sig.params.length} argument${sig.params.length === 1 ? "" : "s"}, not ${args.length}`);
+        else args.forEach((arg, i) => this.expect(sig.params[i] as Type, arg, e.at, `argument ${i + 1} of ${label}`));
+        return sig.result;
+      }
       case "Construct":
         return this.construct(e);
       case "Field":

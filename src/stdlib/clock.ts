@@ -10,6 +10,7 @@ export const CLOCK = namespace("std.clock", "시계", {
     "지금",
     {
       kind: "effect",
+      capability: "clock",
       signature: { params: [], result: I64 },
       perform: (_args, ctx) => {
         const ms = ctx.host.nowMillis();
@@ -21,6 +22,7 @@ export const CLOCK = namespace("std.clock", "시계", {
     "단조",
     {
       kind: "effect",
+      capability: "clock",
       signature: { params: [], result: I64 },
       perform: (_args, ctx) => {
         const ns = ctx.host.monotonicNanos();

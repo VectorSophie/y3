@@ -296,6 +296,7 @@ describe("algebraic data types", () => {
     },
     output: () => {},
     effect: () => ({ kind: "unit" }),
+    foreign: () => ({ kind: "unit" }),
     now: (v) => {
       if (v.kind !== "concrete") throw new Error("symbolic");
       return v.value;

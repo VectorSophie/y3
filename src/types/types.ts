@@ -132,6 +132,8 @@ export const LIST: TypeDef = { kind: "opaque", name: "List", params: ["T"] };
 export const MAP: TypeDef = { kind: "opaque", name: "Map", params: ["K", "V"] };
 export const SET: TypeDef = { kind: "opaque", name: "Set", params: ["T"] };
 export const FILE: TypeDef = { kind: "opaque", name: "File", params: [] };
+// A pointer foreign code returned (docs/v2-ffi.md): opaque, never built or looked inside.
+export const FOREIGN: TypeDef = { kind: "opaque", name: "Foreign", params: [] };
 
 // Ordinary errors are values: the standard library reports them with these.
 export const FS_ERROR: TypeDef = {
@@ -159,7 +161,7 @@ export const FILE_INFO: TypeDef = {
   ],
 };
 
-export const BUILTIN_TYPE_DEFS: readonly TypeDef[] = [OPTION, RESULT, LIST, MAP, SET, FILE, FS_ERROR, PARSE_ERROR, FILE_INFO];
+export const BUILTIN_TYPE_DEFS: readonly TypeDef[] = [OPTION, RESULT, LIST, MAP, SET, FILE, FOREIGN, FS_ERROR, PARSE_ERROR, FILE_INFO];
 
 export class TypeTable {
   private readonly defs = new Map<string, TypeDef>();

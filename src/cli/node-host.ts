@@ -1,4 +1,6 @@
-import { appendFileSync, existsSync, readFileSync, readSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readSync, realpathSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { resolve, sep } from "node:path";
+import { isProjectPath } from "../space/manifest";
 import { InputReader, type FsErrorKind, type FsResult, type Host } from "../stdlib/host";
 
 // The real outside world for `y3 run`: stdout as the program writes it, stdin read as
@@ -18,7 +20,23 @@ function attempt<T>(f: () => T): FsResult<T> {
   }
 }
 
-export function nodeHost(options: { stdin?: string; write?: (text: string) => void } = {}): Host {
+// Foreign libraries, read only from inside the project directory: a [foreign] path is
+// relative, has no '..', and must not leave the directory through a symbolic link either.
+export function libraryLoader(root: string): (path: string) => Uint8Array | null {
+  return (path) => {
+    if (!isProjectPath(path)) return null;
+    try {
+      const base = realpathSync(root);
+      const real = realpathSync(resolve(base, path));
+      if (!real.startsWith(base + sep) || !statSync(real).isFile()) return null;
+      return new Uint8Array(readFileSync(real));
+    } catch {
+      return null;
+    }
+  };
+}
+
+export function nodeHost(options: { stdin?: string; write?: (text: string) => void; root?: string } = {}): Host {
   const chunk = Buffer.alloc(4096);
   const decoder = new TextDecoder("utf-8");
   let given = options.stdin;
@@ -57,5 +75,6 @@ export function nodeHost(options: { stdin?: string; write?: (text: string) => vo
       }),
     nowMillis: () => BigInt(Date.now()),
     monotonicNanos: () => process.hrtime.bigint(),
+    loadLibrary: libraryLoader(options.root ?? "."),
   };
 }

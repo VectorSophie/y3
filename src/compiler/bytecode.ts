@@ -5,6 +5,8 @@ import type { ConcreteValue } from "../semantics/values";
 import type { Pose } from "../space/manifest";
 import type { Type, TypeDef } from "../types/types";
 import { verifyTypes } from "./verify-types";
+import { checkDecl, FFI_SCALARS, FfiError, type FfiParam, type FfiResult, type FfiScalar, type ForeignDecl, type ForeignId, type ForeignLibrary } from "../runtime/ffi";
+import { isProjectPath } from "../space/manifest";
 import type { Executable, NodeInfo } from "../runtime/vm";
 import type { BodyId, Edge, Target } from "./cfg";
 import type { Mir, MirBlock, MirOp, MirTerminator } from "./mir";
@@ -16,7 +18,9 @@ import type { Mir, MirBlock, MirOp, MirTerminator } from "./mir";
 // same program always builds to the same bytes.
 
 export const BYTECODE_MAGIC = "Y3BC";
-export const BYTECODE_VERSION = 1;
+// Version 2 (M9) adds foreign calls: the `foreign` instruction, the 외부 declaration table
+// and the pinned libraries. A version 1 artifact is refused, never reinterpreted.
+export const BYTECODE_VERSION = 2;
 
 export class BytecodeError extends Error {}
 
@@ -60,6 +64,7 @@ const OPS: readonly (readonly [MirOp["op"], readonly (readonly [string, Kind])[]
   ["anchor", [["pose", "pose"]]],
   ["leave", []],
   ["end", []],
+  ["foreign", [["dst", "reg"], ["callee", "str"], ["args", "regs"]]], // Y3BC 2
 ];
 const OPCODE = new Map(OPS.map(([name], i) => [name, i]));
 const ARITH_OPS = new Set(["add", "sub", "mul", "div", "rem"]);
@@ -156,6 +161,9 @@ export type BytecodeModule = {
   readonly entries: readonly [BodyId, Json][];
   readonly nodes: readonly Json[]; // the debug map: body, pose, sentence, plane, span per CFG node
   readonly blocks: readonly { readonly node: number; readonly start: boolean; readonly code: readonly Json[][]; readonly end: Json }[];
+  // Y3BC 2: foreign libraries, each pinned by sha256, and the 외부 declarations.
+  readonly libraries: readonly ForeignLibrary[];
+  readonly foreign: readonly ForeignDecl[];
 };
 
 export function encodeBytecode(mir: Mir, nodes: readonly NodeInfo[], program: CompiledProgram, options: { module: string; maxSteps: number; start: Pose }): BytecodeModule {
@@ -249,6 +257,8 @@ export function encodeBytecode(mir: Mir, nodes: readonly NodeInfo[], program: Co
     entries: [...mir.cfg.entries].map(([id, t]) => [id, t as unknown as Json]),
     nodes: nodes.map((n) => n as unknown as Json),
     blocks,
+    libraries: [...program.libraries.values()],
+    foreign: [...program.foreign.values()],
   };
 }
 
@@ -294,6 +304,7 @@ export function loadBytecode(m: BytecodeModule): Loaded {
   const bodies = new Map(m.bodies.map((b) => [b.id, new Set(b.nouns.map(([id]) => id))]));
   const procedures = new Map(m.procedures.map((p) => [p.id, p]));
   if (!bodies.has("main")) fail("module", "no main body");
+  const { libraries, foreign } = loadForeign(m);
 
   // Nodes and their first blocks.
   const nodeBlock = new Map<number, number>();
@@ -408,6 +419,7 @@ export function loadBytecode(m: BytecodeModule): Loaded {
         const n = (o.args as number[]).length;
         if (sig.rest ? n < sig.params.length : n !== sig.params.length) fail(where, `'${id}' takes ${sig.params.length}${sig.rest ? " or more" : ""} arguments, not ${n}`);
       }
+      if (name === "foreign" && !foreign.has(o.callee as string)) fail(where, `calls foreign function '${String(o.callee)}', which is not declared`);
       if ((name === "pastLeft" || name === "past") && o.moment === "end") fail(where, "a past statement speaks of now or 처음, never 끝");
       return o as MirOp;
     });
@@ -468,7 +480,7 @@ export function loadBytecode(m: BytecodeModule): Loaded {
 
   verifyRegisters(blocks, nodeBlock);
   const nounTypes = new Map(m.bodies.map((b) => [b.id, new Map(b.nouns.map(([id, , type]) => [id, type as unknown as Type]))]));
-  verifyTypes({ blocks, nodeBlock, nodes, nounTypes, procedures: new Map(m.procedures.map((p) => [p.id, { params: p.params.map((x) => x.type), results: p.results }])), typedefs: m.typedefs as unknown as TypeDef[] });
+  verifyTypes({ blocks, nodeBlock, nodes, nounTypes, procedures: new Map(m.procedures.map((p) => [p.id, { params: p.params.map((x) => x.type), results: p.results }])), typedefs: m.typedefs as unknown as TypeDef[], foreign });
   const entries = new Map(m.entries.map(([id, t]) => [id, target(t as unknown as Target, `entry ${id}`)]));
   if (!entries.has("main")) fail("module", "no entry for main");
 
@@ -483,6 +495,8 @@ export function loadBytecode(m: BytecodeModule): Loaded {
       m.procedures.map((p) => [p.id, { id: p.id, name: p.name, module: p.module, params: p.params, results: p.results, space: empty, cells: new Map(), nouns: nounsOf(p.id) } as Procedure]),
     ),
     types: m.typedefs as unknown as TypeDef[],
+    foreign,
+    libraries,
   };
   return {
     executable: { blocks, nodeBlock, nodes, entries, registers: m.registers, start: m.start.position },
@@ -490,6 +504,63 @@ export function loadBytecode(m: BytecodeModule): Loaded {
     maxSteps: m.maxSteps,
     module: m.module,
   };
+}
+
+// The foreign tables, read as hostile input: every field is checked, every declaration
+// obeys the FFI rules and names a pinned library inside the project. The library's real
+// export types are checked against these declarations again when it loads.
+function loadForeign(m: BytecodeModule): { libraries: Map<string, ForeignLibrary>; foreign: Map<ForeignId, ForeignDecl> } {
+  const fail = (message: string): never => {
+    throw new BytecodeError(`foreign table: ${message}`);
+  };
+  if (!Array.isArray(m.libraries) || !Array.isArray(m.foreign)) fail("missing");
+  const libraries = new Map<string, ForeignLibrary>();
+  for (const l of m.libraries) {
+    if (typeof l?.alias !== "string" || typeof l.path !== "string" || typeof l.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(l.sha256)) fail("a malformed library entry");
+    if (!isProjectPath(l.path)) fail(`library '${l.alias}' is at '${l.path}', outside the project`);
+    if (libraries.has(l.alias)) fail(`library '${l.alias}' appears twice`);
+    libraries.set(l.alias, { alias: l.alias, path: l.path, sha256: l.sha256 });
+  }
+  const scalar = (x: unknown) => (FFI_SCALARS as readonly unknown[]).includes(x);
+  const length = (x: unknown) => typeof x === "number" && Number.isInteger(x) && x >= 0 && x <= 1 << 20;
+  const param = (p: Record<string, unknown>): FfiParam => {
+    if (p?.kind === "scalar" && scalar(p.type)) return { kind: "scalar", type: p.type as FfiScalar };
+    if (p?.kind === "text" || p?.kind === "handle") return { kind: p.kind };
+    if (p?.kind === "bytes" && (p.length === null || length(p.length))) return { kind: "bytes", length: p.length as number | null };
+    if (p?.kind === "out" && length(p.length)) return { kind: "out", length: p.length as number };
+    return fail(`a malformed FFI parameter ${JSON.stringify(p)}`);
+  };
+  const result = (r: Record<string, unknown>): FfiResult => {
+    if (r?.kind === "unit" || r?.kind === "handle") return { kind: r.kind };
+    if (r?.kind === "scalar" && scalar(r.type)) return { kind: "scalar", type: r.type as FfiScalar };
+    if (r?.kind === "out" && length(r.length)) return { kind: "out", length: r.length as number };
+    return fail(`a malformed FFI result ${JSON.stringify(r)}`);
+  };
+  const foreign = new Map<ForeignId, ForeignDecl>();
+  for (const d of m.foreign as unknown as Record<string, unknown>[]) {
+    if (typeof d?.library !== "string" || typeof d.name !== "string" || typeof d.symbol !== "string" || typeof d.pure !== "boolean" || typeof d.frees !== "boolean" || !Array.isArray(d.params)) fail("a malformed declaration");
+    const decl: ForeignDecl = {
+      id: `${d.library}.${d.name}`,
+      library: d.library as string,
+      name: d.name as string,
+      symbol: d.symbol as string,
+      params: (d.params as Record<string, unknown>[]).map(param),
+      result: result(d.result as Record<string, unknown>),
+      pure: d.pure as boolean,
+      frees: d.frees as boolean,
+    };
+    if (d.id !== decl.id) fail(`declaration '${String(d.id)}' is not named '${decl.id}'`);
+    if (!libraries.has(decl.library)) fail(`'${decl.id}' uses library '${decl.library}', which is not pinned`);
+    if (foreign.has(decl.id)) fail(`'${decl.id}' is declared twice`);
+    try {
+      checkDecl(decl);
+    } catch (e) {
+      if (e instanceof FfiError) fail(e.message);
+      throw e;
+    }
+    foreign.set(decl.id, decl);
+  }
+  return { libraries, foreign };
 }
 
 // Every register a step reads must have been written earlier on every path through that

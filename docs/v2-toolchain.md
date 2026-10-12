@@ -1,4 +1,4 @@
-# Y3 v2: the toolchain (M8)
+# Y3 v2: the toolchain (M8, M9)
 
 One `y3` command, Go-style.
 
@@ -6,9 +6,9 @@ One `y3` command, Go-style.
 |---|---|---|
 | `y3 check <file>` | parse, resolve names and modules, type-check | HIR; nothing runs, no CFG |
 | `y3 fmt <file> [-w] [--check] [-p flat\|perspective\|strong]` | canonical text | — |
-| `y3 build <file> [-o out.y3b]` | compile to a bytecode artifact (`docs/v2-bytecode.md`) | verified bytecode |
-| `y3 run <file \| artifact.y3b> [--engine vm\|hir]` | run; the VM by default | — |
-| `y3 trace <file> [--engine vm\|hir]` | run, printing every step | — |
+| `y3 build <file> [-o out] [--target y3bc\|wasm]` | compile to a bytecode artifact (`docs/v2-bytecode.md`) or a WebAssembly one (`docs/v2-wasm.md`) | verified bytecode |
+| `y3 run <file \| artifact.y3b \| artifact.wasm> [--engine vm\|hir\|wasm] [--record r.y3r \| --replay r.y3r [--force]]` | run; the VM by default, the WASM backend for `.wasm`; record or replay effects (`docs/v2-replay.md`) | — |
+| `y3 trace <file> [--engine vm\|hir\|wasm]` | run, printing every step | — |
 | `y3 test [paths…] [--engine vm\|hir]` | run every program with a `[test]` table and check it | — |
 | `y3 doc [<file>] [--json] [--std]` | a module's documentation, or the standard library's | — |
 | `y3 lock <file>` | resolve git imports and write `y3.lock` | — |
@@ -20,7 +20,12 @@ The inspection commands are for debugging; nothing requires them.
 
 `y3 run` compiles source down to bytecode and runs it on the VM, so it runs exactly
 what `y3 build` would write. `--engine hir` runs the HIR interpreter, the reference
-implementation. M8 keeps it on purpose: the differential tests compare the two engines
+implementation. `--engine wasm` (M9) compiles that bytecode to WebAssembly and runs it
+through the same runtime core; a `.wasm` artifact always runs on it.
+
+Programs that declare foreign libraries (`[foreign]`, `docs/v2-ffi.md`) read them, from
+inside the program's directory only, when they are checked, built and run. `y3 test`
+runs each test with its own directory as the library root. M8 keeps it on purpose: the differential tests compare the two engines
 on every fixture and on thousands of generated programs.
 
 ## Tests

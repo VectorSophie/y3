@@ -1,3 +1,4 @@
+import { foreignLabel } from "../runtime/ffi";
 import type { CallableId, Expr, Moment, NounId, Pattern, PlaneId, Stmt } from "../ir/hir";
 import type { CompiledProgram } from "../ir/program";
 import type { ArithOp, OrderOp } from "../semantics/numeric";
@@ -34,6 +35,7 @@ export type MirOp =
   | { readonly op: "eq"; readonly dst: Reg; readonly a: Reg; readonly b: Reg }
   | { readonly op: "order"; readonly dst: Reg; readonly order: OrderOp; readonly a: Reg; readonly b: Reg }
   | { readonly op: "builtin"; readonly dst: Reg; readonly callee: CallableId; readonly args: readonly Reg[]; readonly types: { readonly args: readonly Type[]; readonly result: Type } }
+  | { readonly op: "foreign"; readonly dst: Reg; readonly callee: string; readonly args: readonly Reg[] } // an 외부 call; args are concrete
   | { readonly op: "construct"; readonly dst: Reg; readonly type: string; readonly variant: string | null; readonly fields: readonly Reg[]; readonly result: Type }
   | { readonly op: "field"; readonly dst: Reg; readonly record: Reg; readonly index: number; readonly name: string }
   | { readonly op: "checkField"; readonly record: Reg; readonly index: number; readonly name: string }
@@ -176,6 +178,13 @@ export function lowerToMir(program: CompiledProgram, cfg: Cfg): Mir {
           const args = e.args.map(sub);
           const d = dst();
           emit({ op: "builtin", dst: d, callee: e.callee, args, types: { args: e.args.map((a) => a.type), result: e.type } });
+          return d;
+        }
+        case "ForeignCall": {
+          // Foreign code takes concrete values only: each argument is needed now.
+          const args = e.args.map((a) => needed(a, foreignLabel(e.foreign)));
+          const d = dst();
+          emit({ op: "foreign", dst: d, callee: e.foreign, args });
           return d;
         }
         case "Construct": {
@@ -413,6 +422,8 @@ export function formatMirOp(o: MirOp): string {
       return `${r(o.dst)} = ${o.order} ${r(o.a)}, ${r(o.b)}`;
     case "builtin":
       return `${r(o.dst)} = builtin ${o.callee}(${o.args.map(r).join(", ")}) : ${formatType(o.types.result)}`;
+    case "foreign":
+      return `${r(o.dst)} = foreign ${o.callee}(${o.args.map(r).join(", ")})`;
     case "construct":
       return `${r(o.dst)} = construct ${o.variant ?? o.type}(${o.fields.map(r).join(", ")})`;
     case "field":

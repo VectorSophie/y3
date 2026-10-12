@@ -1,4 +1,4 @@
-# Y3 v2: bytecode and the VM (M8)
+# Y3 v2: bytecode and the VM (M8, version 2 in M9)
 
 Bytecode is MIR in a portable, versioned, verified form. One MIR operation is one
 instruction. `compiler/bytecode.ts` defines the format; `runtime/vm.ts` runs it.
@@ -8,15 +8,15 @@ instruction. `compiler/bytecode.ts` defines the format; `runtime/vm.ts` runs it.
 The artifact is text: a header line, then one JSON document.
 
 ```
-Y3BC 1
-{"magic":"Y3BC","version":1,"module":"countdown","maxSteps":10000,"start":{…},"registers":3,
+Y3BC 2
+{"magic":"Y3BC","version":2,"module":"countdown","maxSteps":10000,"start":{…},"registers":3,
  "bodies":[…],"procedures":[…],"constants":[…],"patterns":[…],"types":[…],"edges":[…],
- "entries":[…],"nodes":[…],"blocks":[…]}
+ "entries":[…],"nodes":[…],"blocks":[…],"libraries":[…],"foreign":[…]}
 ```
 
 | Field | Holds |
 |---|---|
-| `magic`, `version` | `Y3BC`, `1`. Any other version is refused with "rebuild from source". |
+| `magic`, `version` | `Y3BC`, `2`. Any other version is refused with "rebuild from source". |
 | `module`, `maxSteps`, `start` | the manifest's name, step limit and start pose |
 | `registers` | registers per step, at most |
 | `bodies` | the noun table of the main volume and of each callable plane: id, name and **resolved type** |
@@ -30,9 +30,12 @@ Y3BC 1
 | `entries` | where each body starts |
 | `nodes` | **the debug map**: per CFG node, its body, full pose, sentence, plane and source span |
 | `blocks` | per block, its node, whether the node's step starts there, `code` (instructions) and `end` (terminator) |
+| `libraries` | (v2) foreign libraries: alias, project-relative path, **sha256** (`docs/v2-ffi.md`) |
+| `foreign` | (v2) 외부 declarations: id, library, name, symbol, FFI parameter and result types, `pure`, `frees` |
 
 An instruction is `[opcode, operand…]`. Opcodes and operand kinds come from a single
-table, `OPS` in `compiler/bytecode.ts`: 35 opcodes, from `0 const` to `34 end`. Operands
+table, `OPS` in `compiler/bytecode.ts`: 36 opcodes, from `0 const` to `34 end`, and
+`35 foreign` (`[35, dst, "<library>.<name>", [args…]]`, version 2). Operands
 are registers, noun ids, pool indices, strings or small integers. A terminator is one of:
 
 ```
@@ -65,7 +68,21 @@ compiler wrote the module. It refuses:
 - an `arith` with a bad operation or numeric type, a bad ordering, or a past statement
   about `끝`;
 - **a register read before it is written** on some path through the step (a dataflow
-  pass over the step's blocks).
+  pass over the step's blocks);
+- (v2) a `foreign` instruction calling a function the `foreign` table does not declare;
+  a malformed library or declaration entry, field by field; a library path outside the
+  project or a hash that is not 64 hex digits; a declaration naming an unpinned library,
+  declared twice, or breaking the FFI rules (`checkDecl`: a pure function with pointers,
+  a free without a pointer, two out-buffers, an out-buffer that is not the result, a type
+  that does not cross).
+
+`.y3b` files are hostile input. Typed bytecode does not make FFI safe on its own, so
+foreign calls are guarded in three places: the loader (above), the type verifier (a
+`foreign` instruction's argument registers must have exactly the declared Y3 types, and
+its result register the declared result: an `i64` can never reach a `Foreign`
+parameter), and the runtime (the library's bytes must match the pinned sha256 and its
+real export types must match the declarations, before it is instantiated; handles are
+checked on every call).
 
 The VM also guards at run time: an unwritten or nonexistent register, a missing block, a
 return with nothing to return to, or a runtime loop or frame that disagrees with the CFG
@@ -156,10 +173,24 @@ temporal logic and no built-in dispatch. It calls `semantics/numeric` through th
 `callBuiltin`. The only things it does differently from the interpreter are following
 CFG edges and holding values in registers.
 
+Since M9 the VM is split along that line (`runtime/vm.ts`): `executeOp` and
+`executeTest` run one operation or test, `runSteps` is the run loop (steps, trace,
+faults, edges, back edges, calls, returns), and a backend supplies only the blocks of
+one step. The VM keeps registers in an array; the WebAssembly backend keeps them in
+`externref` locals and calls the same `executeOp` through its imports.
+
 ## Compatibility
 
 The bytecode version changes whenever an opcode, an operand's meaning or the layout
 changes. There is no cross-version loading: an artifact is rebuilt from source.
+
+**Version 2 (M9)** adds the `foreign` instruction (opcode 35, appended so opcodes 0–34
+keep their numbers) and the `libraries` and `foreign` tables. Version 1 was merged with
+M8, so its meaning is not changed in place: a `Y3BC 1` artifact is refused ("bytecode
+version 1 is not supported: this toolchain reads version 2; rebuild from source").
+
+A WebAssembly artifact (`docs/v2-wasm.md`) carries its Y3BC 2 text in a custom section and
+is verified through it.
 
 Version 1 gained its type tables (`typedefs`, typed `bodies`, `types`, `callTypes`) and
 the typed `const`/`construct`/`array` operands before M8 was merged. No version-1

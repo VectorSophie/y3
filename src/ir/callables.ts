@@ -1,6 +1,7 @@
 import type { ConcreteValue } from "../semantics/values";
 import type { Kind, Type } from "../types/types";
-import type { Host } from "../stdlib/host";
+import type { Capability, Host } from "../stdlib/host";
+import type { Payload } from "../runtime/payload";
 import { STANDARD_LIBRARY } from "../stdlib/index";
 import type { CallableId } from "./hir";
 
@@ -30,9 +31,27 @@ export type Signature = {
 export type CallTypes = { readonly args: readonly Type[]; readonly result: Type };
 
 // One committed external effect: what crossed the boundary, in the order it crossed.
-// `source` is the callable's id (std.fs.write, std.io.readLine, …) or std.io.stdout for
-// a committed write; `value` what the effect returned (or, for stdout, the text).
-export type HostEvent = { readonly step: number; readonly source: string; readonly value: string };
+//   step, at, frame   where it happened: the step, the cell, the activation
+//   source            the callable's id (std.fs.write, std.io.readLine, a foreign id), or
+//                     std.io.stdout for a committed write
+//   kind              output, input (stdin, clock, file reads), effect (file writes and
+//                     the rest), foreign
+//   resource          the handle it acts on or opens ("file#0", "foreign#2"), stable
+//                     across record and replay; null when there is none
+//   args              the arguments, as debug text
+//   value             the result, as debug text (file contents are redacted)
+//   payload           the result itself, for replay (debug text is never replayed)
+export type HostEvent = {
+  readonly step: number;
+  readonly at: { readonly x: number; readonly y: number; readonly z: number };
+  readonly frame: string | null;
+  readonly source: string;
+  readonly kind: "output" | "input" | "effect" | "foreign";
+  readonly resource: string | null;
+  readonly args: readonly string[];
+  readonly value: string;
+  readonly payload: Payload;
+};
 
 export type EffectContext = {
   readonly host: Host;
@@ -42,7 +61,13 @@ export type EffectContext = {
 export type CallableBody =
   | { readonly kind: "pure"; readonly apply: (args: readonly ConcreteValue[], types: CallTypes) => ConcreteValue }
   | { readonly kind: "output"; readonly newline: boolean }
-  | { readonly kind: "effect"; readonly perform: (args: readonly ConcreteValue[], ctx: EffectContext, types: CallTypes) => ConcreteValue };
+  | {
+      readonly kind: "effect";
+      readonly perform: (args: readonly ConcreteValue[], ctx: EffectContext, types: CallTypes) => ConcreteValue;
+      readonly capability: Capability; // what the host must provide
+      readonly denied?: () => ConcreteValue; // the ordinary error when it does not (else FAULT)
+      readonly redact?: boolean; // keep the result out of the event's debug text (file contents)
+    };
 
 export type Callable = {
   readonly id: CallableId;

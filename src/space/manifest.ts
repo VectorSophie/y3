@@ -17,9 +17,15 @@ export type Manifest = {
   // [imports] alias = "path.y3": modules this one uses, by the namespace it calls them.
   // Paths live here so that sentences never contain one.
   readonly imports: ReadonlyMap<string, string>;
+  // [foreign] alias = "libs/math.wasm": foreign libraries (docs/v2-ffi.md), by the
+  // namespace their 외부 declarations use. Relative paths inside the project only.
+  readonly foreign: ReadonlyMap<string, string>;
   // [test]: what `y3 test` expects of this program. null when it is not a test.
   readonly test: TestExpectation | null;
 };
+
+// A relative path that stays inside the project: not absolute, no drive letter, no '..'.
+export const isProjectPath = (path: string) => path.length > 0 && !/^([\\/]|[A-Za-z]:)/.test(path) && !path.split(/[\\/]/).includes("..") && !path.includes("\0");
 
 export const DEFAULT_MAX_STEPS = 10_000;
 
@@ -28,6 +34,7 @@ export const DEFAULT_MANIFEST: Manifest = {
   start: { position: { x: 0, y: 0, z: 0 }, orientation: { forward: "south", up: "up" } },
   maxSteps: DEFAULT_MAX_STEPS,
   imports: new Map(),
+  foreign: new Map(),
   test: null,
 };
 
@@ -38,7 +45,7 @@ export const MANIFEST_CODES = {
   START_IN_VOID: "Y3M004",
 } as const;
 
-const KNOWN_TOP_LEVEL = new Set(["name", "y3", "start", "limits", "experimental", "imports", "test"]);
+const KNOWN_TOP_LEVEL = new Set(["name", "y3", "start", "limits", "experimental", "imports", "foreign", "test"]);
 
 export type TestExpectation = { readonly output: readonly string[] | null; readonly status: string; readonly stdin: string };
 
@@ -168,6 +175,21 @@ export function interpretManifest(raw: string | null, span: Span = WHOLE_FILE): 
     }
   }
 
+  const foreign = new Map<string, string>();
+  const rawForeign = table["foreign"];
+  if (rawForeign !== undefined) {
+    if (!isRecord(rawForeign)) {
+      error('[foreign] must be a table of alias = "library.wasm"');
+    } else {
+      for (const [alias, path] of Object.entries(rawForeign)) {
+        // Never outside the project: no absolute paths, drive letters or '..' segments.
+        if (typeof path !== "string" || !path.endsWith(".wasm")) error(`foreign.${alias} must be the relative path of a .wasm library`);
+        else if (!isProjectPath(path)) error(`foreign.${alias} = "${path}" leaves the project: a foreign library is a relative path inside it, without '..'`);
+        else foreign.set(alias, path);
+      }
+    }
+  }
+
   let test: TestExpectation | null = null;
   const rawTest = table["test"];
   if (rawTest !== undefined) {
@@ -186,7 +208,7 @@ export function interpretManifest(raw: string | null, span: Span = WHOLE_FILE): 
   if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
     return { manifest: null, diagnostics };
   }
-  return { manifest: { name, start: { position, orientation: { forward, up } }, maxSteps, imports, test }, diagnostics };
+  return { manifest: { name, start: { position, orientation: { forward, up } }, maxSteps, imports, foreign, test }, diagnostics };
 }
 
 // The start pose must be on an authored cell; starting in VOID is a document error.

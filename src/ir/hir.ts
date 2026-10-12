@@ -51,6 +51,8 @@ export type Expr = Typed &
     | { readonly node: "Eq"; readonly left: Expr; readonly right: Expr } // Eq<T>(T, T) -> Bool
     | { readonly node: "Not"; readonly operand: Expr }
     | { readonly node: "Call"; readonly callee: CallableId; readonly args: readonly Expr[] }
+    // A call across the FFI boundary to an 외부 declaration (docs/v2-ffi.md).
+    | { readonly node: "ForeignCall"; readonly foreign: string; readonly args: readonly Expr[] }
     | { readonly node: "TemporalAnchorRead"; readonly noun: NounId; readonly moment: Moment } // 처음의 N, 끝의 N
     // Algebraic data: build a variant (or a record, variant null), take a record field,
     // and match by pattern.
@@ -134,6 +136,7 @@ export function childExprs(item: Stmt | Expr): Expr[] {
     case "Not":
       return [item.operand];
     case "Call":
+    case "ForeignCall":
     case "Construct":
       return [...item.args];
     case "Field":

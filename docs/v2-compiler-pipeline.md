@@ -187,6 +187,12 @@ The two engines differ only in how they find control flow and order work:
 Differential testing (`engine=hir` against `engine=vm`) therefore checks exactly what
 differs: control-flow compilation and evaluation order.
 
+M9 adds a third engine, the WebAssembly backend (`docs/v2-wasm.md`). It compiles the
+verified bytecode's blocks to WebAssembly and shares the VM's run loop (`runSteps`) and
+operations (`executeOp`), so it differs from the VM only in where registers live and
+who walks the blocks of a step. Foreign calls, capabilities and replay
+(`docs/v2-ffi.md`, `docs/v2-replay.md`) are also part of the core's one effect path.
+
 ## 6. Optimization boundary
 
 Optimizations run on MIR registers inside a step, and never on cells or edges:

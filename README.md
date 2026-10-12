@@ -169,6 +169,16 @@ runtime core as the reference interpreter:
 y3 check · fmt · build · run [--engine vm|hir] · trace · test · doc · lock · ir · cfg · mir · bytecode
 ```
 
+**M9** opens the systems boundary (`docs/v2-systems-boundary.md`): C ABI foreign
+functions over sandboxed wasm32 libraries, declared with `외부` (`docs/v2-ffi.md`); a
+WebAssembly backend that compiles bytecode and imports the runtime core
+(`docs/v2-wasm.md`); host capabilities, structured effect events and deterministic replay
+(`docs/v2-replay.md`). Bytecode is now `Y3BC 2`.
+
+```
+y3 build program.y3 --target wasm · y3 run program.wasm · y3 run program.y3 --record run.y3r · --replay run.y3r
+```
+
 
 ```
 ⟦
