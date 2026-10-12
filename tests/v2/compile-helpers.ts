@@ -56,3 +56,17 @@ export function observable(r: ProgramResult) {
     temporal: r.temporal,
   });
 }
+
+import { compileWasm, loadWasmArtifact, runWasm } from "../../src/v2";
+
+// source → MIR (optimized) → Y3BC → WebAssembly artifact → verified load → WASM backend.
+export function wasmArtifact(c: { program: CompiledProgram; manifest: Manifest }): Uint8Array {
+  const compiled = compileToMir(c.program, c.manifest.start);
+  const text = writeArtifact(encodeBytecode(optimizeMir(compiled.mir).mir, compiled.nodes, c.program, { module: "main", maxSteps: c.manifest.maxSteps, start: c.manifest.start }));
+  return compileWasm(moduleOf(text), text);
+}
+
+export function runWasmEngine(c: { program: CompiledProgram; manifest: Manifest }, maxSteps?: number, stdin?: string): ProgramResult {
+  const { loaded, module } = loadWasmArtifact(wasmArtifact(c));
+  return runWasm(module, loaded, c.manifest, { maxSteps, host: host2({ stdin, now: 42n }) });
+}

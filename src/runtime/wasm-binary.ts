@@ -129,6 +129,7 @@ export type ModuleDef = {
   readonly globals?: readonly { readonly type: ValType; readonly mutable: boolean; readonly init: readonly number[] }[];
   readonly functions: readonly FuncDef[];
   readonly data?: readonly { readonly offset: number; readonly bytes: readonly number[] }[];
+  readonly custom?: readonly { readonly name: string; readonly bytes: Uint8Array }[]; // custom sections, at the end
 };
 
 // Function indices: imports first, then `functions` in order.
@@ -164,7 +165,37 @@ export function encodeModule(def: ModuleDef): Uint8Array {
     ...section(7, exports.length ? vec(exports) : []),
     ...section(10, code.length ? vec(code) : []),
     ...section(11, def.data?.length ? vec(def.data.map((d) => [0x00, 0x41, ...leb(d.offset, true), 0x0b, ...leb(d.bytes.length), ...d.bytes])) : []),
+    ...(def.custom ?? []).flatMap((c) => section(0, [...str(c.name), ...c.bytes])),
   ]);
+}
+
+// The contents of a module's custom section, or null.
+export function readCustomSection(bytes: Uint8Array, name: string): Uint8Array | null {
+  if (bytes.length < 8 || bytes[0] !== 0 || bytes[1] !== 0x61 || bytes[2] !== 0x73 || bytes[3] !== 0x6d) return null;
+  let at = 8;
+  const u32 = () => {
+    let result = 0;
+    for (let shift = 0; shift < 35; shift += 7) {
+      const b = bytes[at++];
+      if (b === undefined) throw new WasmFormatError("not a valid WebAssembly module: unexpected end");
+      result |= (b & 0x7f) << shift;
+      if (!(b & 0x80)) return result >>> 0;
+    }
+    throw new WasmFormatError("not a valid WebAssembly module: bad LEB128");
+  };
+  while (at < bytes.length) {
+    const id = bytes[at++];
+    const size = u32();
+    const end = at + size;
+    if (end > bytes.length) throw new WasmFormatError("not a valid WebAssembly module: a section runs past the end");
+    if (id === 0) {
+      const n = u32();
+      const found = new TextDecoder().decode(bytes.subarray(at, at + n));
+      if (found === name) return bytes.slice(at + n, end);
+    }
+    at = end;
+  }
+  return null;
 }
 
 // Instruction helpers for hand-written bodies.

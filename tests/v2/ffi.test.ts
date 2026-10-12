@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   compileProgram,
   compileToMir,
+  compileWasm,
+  loadWasmArtifact,
+  runWasm,
   encodeBytecode,
   hasErrors,
   loadDocument,
@@ -81,9 +84,12 @@ function run(cells: string[], options: { host?: () => MemoryHost; decls?: string
   const c = ok(cells, options.decls);
   const host = options.host ?? (() => memoryHost({ libraries: LIBS }));
   const hir = runProgram(c.program, c.manifest, { host: host() });
-  const loaded = moduleOf(artifactOf(c));
+  const artifact = artifactOf(c);
+  const loaded = moduleOf(artifact);
   const vm = runExecutable(loaded.executable, loaded.program, c.manifest, { host: host() });
   expect(observable(vm)).toEqual(observable(hir));
+  const wasm = loadWasmArtifact(compileWasm(loaded, artifact));
+  expect(observable(runWasm(wasm.module, wasm.loaded, c.manifest, { host: host() }))).toEqual(observable(hir));
   return hir;
 }
 const out = (cells: string[]) => run([...cells, "끝이다."]).output;

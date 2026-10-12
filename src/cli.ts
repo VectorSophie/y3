@@ -67,9 +67,16 @@ function printError(error: unknown): never {
   process.exit(1);
 }
 
-function engineOf(name: string): "vm" | "hir" {
-  if (name !== "vm" && name !== "hir") throw new Error(`unknown engine '${name}': use vm or hir`);
+function engineOf(name: string): "vm" | "hir" | "wasm" {
+  if (name !== "vm" && name !== "hir" && name !== "wasm") throw new Error(`unknown engine '${name}': use vm, hir or wasm`);
   return name;
+}
+
+// A WebAssembly artifact from 'y3 build --target wasm' (binary: "\0asm").
+const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d];
+function wasmArtifactAt(filePath: string): Uint8Array | null {
+  const bytes = new Uint8Array(readFileSync(filePath));
+  return WASM_MAGIC.every((b, i) => bytes[i] === b) ? bytes : null;
 }
 
 const cli = new Command();
@@ -95,16 +102,18 @@ cli
   .argument("<file>", "Path to .y3 file")
   .option("-i, --input <values>", "Space/comma separated integer input values")
   .option("--max-steps <count>", "Execution step limit (default: 10000)")
-  .option("--engine <engine>", "v2: vm (bytecode VM, default) or hir (the reference interpreter)", "vm")
+  .option("--engine <engine>", "v2: vm (bytecode VM, default), hir (the reference interpreter) or wasm (the WebAssembly backend)", "vm")
   .option("--record <file>", "v2: record the run's effects to a replay file (Y3REPLAY)")
   .option("--replay <file>", "v2: replay a recorded run: effects return their recorded results")
   .option("--force", "v2: replay a recording made for a different program")
   .action((filePath: string, options: { input?: string; maxSteps?: string; engine: string; record?: string; replay?: string; force?: boolean }) => {
     try {
-      const source = readSource(filePath);
-      if (looksLikeV2(source) || source.startsWith("Y3BC ")) {
+      const wasm = wasmArtifactAt(filePath);
+      const source = wasm ? "" : readSource(filePath);
+      if (wasm || looksLikeV2(source) || source.startsWith("Y3BC ")) {
         if (options.record && options.replay) throw new Error("--record and --replay cannot be used together");
-        runV2(filePath, source, { maxSteps: parseMaxSteps(options.maxSteps), input: options.input, trace: false, engine: engineOf(options.engine), record: options.record, replay: options.replay, force: options.force });
+        runV2(filePath, source, {
+          wasm: wasm ?? undefined, maxSteps: parseMaxSteps(options.maxSteps), input: options.input, trace: false, engine: engineOf(options.engine), record: options.record, replay: options.replay, force: options.force });
         return;
       }
       const program = parseProgram(source);
@@ -125,12 +134,13 @@ cli
   .argument("<file>", "Path to .y3 file")
   .option("-i, --input <values>", "Space/comma separated integer input values")
   .option("--max-steps <count>", "Execution step limit (default: 10000)")
-  .option("--engine <engine>", "v2: vm (bytecode VM, default) or hir (the reference interpreter)", "vm")
+  .option("--engine <engine>", "v2: vm (bytecode VM, default), hir (the reference interpreter) or wasm (the WebAssembly backend)", "vm")
   .action((filePath: string, options: { input?: string; maxSteps?: string; engine: string }) => {
     try {
-      const source = readSource(filePath);
-      if (looksLikeV2(source) || source.startsWith("Y3BC ")) {
-        runV2(filePath, source, { maxSteps: parseMaxSteps(options.maxSteps), input: options.input, trace: true, engine: engineOf(options.engine) });
+      const wasm = wasmArtifactAt(filePath);
+      const source = wasm ? "" : readSource(filePath);
+      if (wasm || looksLikeV2(source) || source.startsWith("Y3BC ")) {
+        runV2(filePath, source, { wasm: wasm ?? undefined, maxSteps: parseMaxSteps(options.maxSteps), input: options.input, trace: true, engine: engineOf(options.engine) });
         return;
       }
       const program = parseProgram(source);

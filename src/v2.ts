@@ -57,3 +57,5 @@ export * from "./tools/replay";
 export * from "./runtime/payload";
 export * from "./runtime/wasm-binary";
 export * from "./runtime/ffi";
+export * from "./compiler/wasm";
+export * from "./runtime/wasm-host";

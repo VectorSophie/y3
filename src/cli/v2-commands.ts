@@ -5,6 +5,8 @@ import { loadDocument } from "../container/document";
 import { compileProgram, type ModuleResolver } from "../semantics/program";
 import { runProgram, type ProgramResult } from "../runtime/interpreter";
 import { runExecutable } from "../runtime/vm";
+import { compileWasm, loadWasmArtifact } from "../compiler/wasm";
+import { runWasm } from "../runtime/wasm-host";
 import { ReplayDivergence, type RunOptions } from "../runtime/core";
 import { readReplay, ReplayError, writeReplay, type Replay } from "../tools/replay";
 import { compileToMir } from "../compiler/compile";
@@ -72,7 +74,7 @@ function compileOrExit(filePath: string, source?: string, resolver: ModuleResolv
   return { program: compiled.program, manifest };
 }
 
-export type Engine = "vm" | "hir";
+export type Engine = "vm" | "hir" | "wasm";
 
 // Compiles a program to an executable: spatial CFG, MIR (optimized), and back through the
 // bytecode encoding, so `y3 run` executes exactly what `y3 build` would write.
@@ -81,7 +83,7 @@ function executableFor(program: CompiledProgram, manifest: Manifest, module: str
   return loadBytecode(encodeBytecode(optimizeMir(mir).mir, nodes, program, { module, maxSteps: manifest.maxSteps, start: manifest.start }));
 }
 
-export type RunV2Options = { maxSteps?: number; input?: string; trace: boolean; engine?: Engine; record?: string; replay?: string; force?: boolean };
+export type RunV2Options = { maxSteps?: number; input?: string; trace: boolean; engine?: Engine; record?: string; replay?: string; force?: boolean; wasm?: Uint8Array };
 
 export function runV2(filePath: string, source: string, options: RunV2Options): void {
   // Output is written as the program commits it; a trace prints the run instead.
@@ -90,7 +92,23 @@ export function runV2(filePath: string, source: string, options: RunV2Options): 
   // program's identity for replay (docs/v2-replay.md).
   let artifact: string;
   let execute: (run: RunOptions) => ProgramResult;
-  if (source.startsWith(`${BYTECODE_MAGIC} `)) {
+  // The WASM backend runs what the bytecode verifier accepted, compiled.
+  const onWasm = (loaded: Loaded, text: string, manifest: Manifest) => {
+    const { module } = loadWasmArtifact(compileWasm(loaded, text));
+    return (run: RunOptions) => runWasm(module, loaded, manifest, run);
+  };
+  if (options.wasm) {
+    if (options.engine === "hir") fatal(`${filePath} is a WebAssembly artifact: only the wasm engine runs it`);
+    let found: ReturnType<typeof loadWasmArtifact>;
+    try {
+      found = loadWasmArtifact(options.wasm);
+    } catch (error) {
+      fatal(`${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    artifact = found.artifact;
+    const manifest = { ...DEFAULT_MANIFEST, maxSteps: found.loaded.maxSteps };
+    execute = (run) => runWasm(found.module, found.loaded, manifest, run);
+  } else if (source.startsWith(`${BYTECODE_MAGIC} `)) {
     if (options.engine === "hir") fatal(`${filePath} is bytecode: only the VM runs it`);
     let loaded: Loaded;
     try {
@@ -100,7 +118,7 @@ export function runV2(filePath: string, source: string, options: RunV2Options): 
     }
     const manifest = { ...DEFAULT_MANIFEST, maxSteps: loaded.maxSteps };
     artifact = source;
-    execute = (run) => runExecutable(loaded.executable, loaded.program, manifest, run);
+    execute = options.engine === "wasm" ? onWasm(loaded, source, manifest) : (run) => runExecutable(loaded.executable, loaded.program, manifest, run);
   } else {
     const { program, manifest } = compileOrExit(filePath, source);
     if (program.space.layers.length === 0) {
@@ -112,7 +130,7 @@ export function runV2(filePath: string, source: string, options: RunV2Options): 
       execute = (run) => runProgram(program, manifest, run);
     } else {
       const loaded = moduleOf(artifact);
-      execute = (run) => runExecutable(loaded.executable, loaded.program, manifest, run);
+      execute = options.engine === "wasm" ? onWasm(loaded, artifact, manifest) : (run) => runExecutable(loaded.executable, loaded.program, manifest, run);
     }
   }
   let replay: Replay | undefined;
@@ -171,17 +189,19 @@ function findSources(path: string): string[] {
 export function registerV2Commands(cli: Command): void {
   cli
     .command("build")
-    .description("compile a program to a portable bytecode artifact (.y3b)")
+    .description("compile a program to a portable bytecode artifact (.y3b), or to WebAssembly (.wasm)")
     .argument("<file>", "path to a .y3 document")
-    .option("-o, --out <file>", "output file (default: the file name with .y3b)")
-    .action((filePath: string, options: { out?: string }) => {
+    .option("-o, --out <file>", "output file (default: the file name with .y3b or .wasm)")
+    .option("--target <target>", "y3bc (default) or wasm", "y3bc")
+    .action((filePath: string, options: { out?: string; target: string }) => {
+      if (options.target !== "y3bc" && options.target !== "wasm") fatal(`unknown target '${options.target}': use y3bc or wasm`);
       const { program, manifest } = compileOrExit(filePath);
       if (program.space.layers.length === 0) fatal(`${filePath} is a library module: it has no volume to build into a program`);
       const { mir, nodes } = compileToMir(program, manifest.start);
       const module = encodeBytecode(optimizeMir(mir).mir, nodes, program, { module: manifest.name ?? basename(filePath, ".y3"), maxSteps: manifest.maxSteps, start: manifest.start });
-      loadBytecode(module); // never write what the VM would refuse
-      const out = options.out ?? join(dirname(filePath), `${basename(filePath, ".y3")}.y3b`);
-      writeFileSync(out, writeArtifact(module));
+      const loaded = loadBytecode(module); // never write what the VM would refuse
+      const out = options.out ?? join(dirname(filePath), `${basename(filePath, ".y3")}.${options.target === "wasm" ? "wasm" : "y3b"}`);
+      writeFileSync(out, options.target === "wasm" ? compileWasm(loaded, writeArtifact(module)) : writeArtifact(module));
       console.log(`built ${out}`);
     });
 

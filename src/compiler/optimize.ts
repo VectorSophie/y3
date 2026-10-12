@@ -17,7 +17,7 @@ import { prim, type Type } from "../types/types";
 
 export type OptimizationStats = { folded: number; neutral: number; copies: number; dead: number };
 
-function readsOf(o: MirOp): Reg[] {
+export function readsOf(o: MirOp): Reg[] {
   const r = o as Record<string, unknown>;
   const single = ["src", "a", "b", "record", "value", "base", "at", "bound", "from", "to", "scrutinee", "left", "right"].filter((k) => typeof r[k] === "number").map((k) => r[k] as Reg);
   const index = typeof r.index === "number" && o.op !== "field" && o.op !== "checkField" && o.op !== "setField" ? [r.index as Reg] : [];
@@ -25,7 +25,7 @@ function readsOf(o: MirOp): Reg[] {
   return [...single, ...index, ...lists];
 }
 
-function termReads(t: MirTerminator): Reg[] {
+export function termReads(t: MirTerminator): Reg[] {
   switch (t.kind) {
     case "call":
       return [...t.args];
