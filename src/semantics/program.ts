@@ -51,7 +51,8 @@ export const PROGRAM_CODES = {
 
 // Reads an imported module: the module's source and a canonical path for it (used to
 // load each module once and to detect cycles), or null when there is no such module.
-export type ModuleResolver = (path: string, from: string | null) => { path: string; source: string } | null;
+// `ast`: the module already parsed (an editor model passes its annotated AST).
+export type ModuleResolver = (path: string, from: string | null) => { path: string; source: string; ast?: DocumentAst } | null;
 
 // Reads a foreign library's bytes, by its [foreign] path relative to the program; null when
 // there is no such library (or the toolchain cannot load libraries, as in a browser).
@@ -93,8 +94,9 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
     reported.add(key);
     diagnostics.push(diagnostic);
   };
+  const imported = (module: Module | null) => (module?.path && module.key !== "main" ? { path: module.path } : {});
   const error = (module: Module | null, code: string, span: Span, message: string) =>
-    report({ code, severity: "error", message: module?.path && module.key !== "main" ? `${module.path}: ${message}` : message, span });
+    report({ code, severity: "error", message: module?.path && module.key !== "main" ? `${module.path}: ${message}` : message, span, ...imported(module) });
 
   const table = new TypeTable();
   const ids = { next: 1 };
@@ -138,9 +140,9 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
       }
       let imported = modules.get(found.path) ?? null;
       if (!imported) {
-        const parsed = parseDocument(found.source);
+        const parsed = found.ast ? { ok: true as const, ast: found.ast, diagnostics: [] } : parseDocument(found.source);
         if (!parsed.ok) {
-          for (const d of parsed.diagnostics) report({ ...d, message: `${found.path}: ${d.message}` });
+          for (const d of parsed.diagnostics) report({ ...d, message: `${found.path}: ${d.message}`, path: found.path });
           continue;
         }
         const importedManifest = interpretManifest(parsed.ast.frontMatter?.text ?? null).manifest;
@@ -365,17 +367,17 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
           const span = source.span;
           const result = parseSentence(cell.sentence);
           for (const issue of result.issues) {
-            report({ ...issue, message: `${module.key !== "main" && module.path ? `${module.path}: ` : ""}[${cell.sentence}] ${issue.message}`, span });
+            report({ ...issue, message: `${module.key !== "main" && module.path ? `${module.path}: ` : ""}[${cell.sentence}] ${issue.message}`, span, ...imported(module) });
           }
           if (!result.sentence) {
             unparsed += 1;
             return;
           }
-          const at: Provenance = { span, plane: { slot: layer.z, name: source.name }, cell: { x, y, z: layer.z }, source: cell.sentence };
+          const at: Provenance = { span, plane: { slot: layer.z, name: source.name }, cell: { x, y, z: layer.z }, source: cell.sentence, ...(cell.ids ? { ids: cell.ids } : {}) };
           let stmt: Stmt;
           try {
             stmt = elaborate(result.sentence, at, nouns, module.scope, (w) =>
-              report({ code: w.code, severity: "warning", message: `${module.key !== "main" && module.path ? `${module.path}: ` : ""}[${cell.sentence}] ${w.message}`, span }),
+              report({ code: w.code, severity: "warning", message: `${module.key !== "main" && module.path ? `${module.path}: ` : ""}[${cell.sentence}] ${w.message}`, span, ...imported(module) }),
             );
           } catch (e) {
             if (!(e instanceof ElaborationError)) throw e;
@@ -416,7 +418,7 @@ export function compileProgram(ast: DocumentAst, space: Space, options: CompileO
       for (const s of inSourceOrder(cells)) checker.stmt(s);
       checker.finish();
       for (const d of checker.diagnostics) {
-        report(module.key !== "main" && module.path ? { ...d, message: `${module.path}: ${d.message}` } : d);
+        report(module.key !== "main" && module.path ? { ...d, message: `${module.path}: ${d.message}`, path: module.path } : d);
       }
     }
     if (diagnostics.filter((d) => d.severity === "error").length > before) return null;

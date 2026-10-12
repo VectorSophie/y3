@@ -8,8 +8,8 @@ instruction. `compiler/bytecode.ts` defines the format; `runtime/vm.ts` runs it.
 The artifact is text: a header line, then one JSON document.
 
 ```
-Y3BC 2
-{"magic":"Y3BC","version":2,"module":"countdown","maxSteps":10000,"start":{…},"registers":3,
+Y3BC 3
+{"magic":"Y3BC","version":3,"module":"countdown","maxSteps":10000,"start":{…},"registers":3,
  "bodies":[…],"procedures":[…],"constants":[…],"patterns":[…],"types":[…],"edges":[…],
  "entries":[…],"nodes":[…],"blocks":[…],"libraries":[…],"foreign":[…]}
 ```
@@ -189,7 +189,7 @@ keep their numbers) and the `libraries` and `foreign` tables. Version 1 was merg
 M8, so its meaning is not changed in place: a `Y3BC 1` artifact is refused ("bytecode
 version 1 is not supported: this toolchain reads version 2; rebuild from source").
 
-A WebAssembly artifact (`docs/v2-wasm.md`) carries its Y3BC 2 text in a custom section and
+A WebAssembly artifact (`docs/v2-wasm.md`) carries its Y3BC text in a custom section and
 is verified through it.
 
 Version 1 gained its type tables (`typedefs`, typed `bodies`, `types`, `callTypes`) and

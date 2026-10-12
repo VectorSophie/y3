@@ -12,7 +12,8 @@ export function compileToMir(program: CompiledProgram, start: Pose): { cfg: Cfg;
     const at = n.stmt?.at;
     const body = n.body === "main" ? program : program.procedures.get(n.body);
     const cell = body?.space.layers[n.pose.position.z]?.plane.rows[n.pose.position.y]?.[n.pose.position.x];
-    return { body: n.body, pose: n.pose, sentence: cell?.sentence ?? null, plane: at?.plane.name ?? (n.body === "main" ? null : (body as { name?: string }).name ?? null), span: at?.span ?? null };
+    const info: NodeInfo = { body: n.body, pose: n.pose, sentence: cell?.sentence ?? null, plane: at?.plane.name ?? (n.body === "main" ? null : (body as { name?: string }).name ?? null), span: at?.span ?? null };
+    return cell?.ids ? { ...info, ids: cell.ids } : info;
   });
   return { cfg, mir, nodes };
 }

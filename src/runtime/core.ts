@@ -1,3 +1,4 @@
+import type { CellIds } from "../ir/identity";
 import { ForeignRuntime, foreignLabel, y3Signature } from "./ffi";
 import type { Coordinate, Pose } from "../space/manifest";
 import type { EffectContext, HostEvent } from "../ir/callables";
@@ -129,7 +130,8 @@ export type Effect =
   | { readonly kind: "ambiguous"; readonly symbols: readonly string[] };
 
 // `frame` names the activation the cell ran in ("제곱#2"); null for the main volume.
-export type ProgramTraceEntry = TraceEntry & { readonly effects: readonly Effect[]; readonly frame: string | null };
+// `ids`: the authored cell that ran, when the program carries identities (an editor build).
+export type ProgramTraceEntry = TraceEntry & { readonly effects: readonly Effect[]; readonly frame: string | null; readonly ids?: CellIds };
 
 export type SymbolSummary = {
   readonly label: string;

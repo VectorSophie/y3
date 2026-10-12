@@ -19,8 +19,10 @@ import type { Mir, MirBlock, MirOp, MirTerminator } from "./mir";
 
 export const BYTECODE_MAGIC = "Y3BC";
 // Version 2 (M9) adds foreign calls: the `foreign` instruction, the 외부 declaration table
-// and the pinned libraries. A version 1 artifact is refused, never reinterpreted.
-export const BYTECODE_VERSION = 2;
+// and the pinned libraries. Version 3 (M10) adds stable identities to the debug map (each
+// node's cell, plane, module, document and statement) and the ProgramRevision a build was
+// made from. Older artifacts are refused, never reinterpreted.
+export const BYTECODE_VERSION = 3;
 
 export class BytecodeError extends Error {}
 
@@ -164,9 +166,11 @@ export type BytecodeModule = {
   // Y3BC 2: foreign libraries, each pinned by sha256, and the 외부 declarations.
   readonly libraries: readonly ForeignLibrary[];
   readonly foreign: readonly ForeignDecl[];
+  // Y3BC 3: the editor model's revision this was built from; null for a plain build.
+  readonly revision: string | null;
 };
 
-export function encodeBytecode(mir: Mir, nodes: readonly NodeInfo[], program: CompiledProgram, options: { module: string; maxSteps: number; start: Pose }): BytecodeModule {
+export function encodeBytecode(mir: Mir, nodes: readonly NodeInfo[], program: CompiledProgram, options: { module: string; maxSteps: number; start: Pose; revision?: string }): BytecodeModule {
   const pool = <T>(encode: (x: T) => Json) => {
     const items: Json[] = [];
     const index = new Map<string, number>();
@@ -259,6 +263,7 @@ export function encodeBytecode(mir: Mir, nodes: readonly NodeInfo[], program: Co
     blocks,
     libraries: [...program.libraries.values()],
     foreign: [...program.foreign.values()],
+    revision: options.revision ?? null,
   };
 }
 
@@ -286,7 +291,7 @@ export function readArtifact(text: string): BytecodeModule {
 
 // ---- Decoding and verification. Nothing here trusts that a compiler wrote the module.
 
-export type Loaded = { readonly executable: Executable; readonly program: CompiledProgram; readonly maxSteps: number; readonly module: string };
+export type Loaded = { readonly executable: Executable; readonly program: CompiledProgram; readonly maxSteps: number; readonly module: string; readonly revision: string | null };
 
 export function loadBytecode(m: BytecodeModule): Loaded {
   const fail = (where: string, message: string): never => {
@@ -315,8 +320,15 @@ export function loadBytecode(m: BytecodeModule): Loaded {
       nodeBlock.set(b.node, i);
     }
   });
+  if (m.revision !== null && typeof m.revision !== "string") fail("module", "a revision must be a string or null");
   nodes.forEach((n, i) => {
     if (!bodies.has(n.body)) fail(`node #${i}`, `unknown body '${n.body}'`);
+    // Identities are opaque strings: checked for shape, never interpreted.
+    if (n.ids !== undefined) {
+      const ids = n.ids as unknown as Record<string, unknown>;
+      const str = (k: string) => typeof ids?.[k] === "string" && (ids[k] as string).length > 0 && (ids[k] as string).length < 256;
+      if (!["document", "module", "plane", "cell"].every(str) || !(ids.node === null || str("node"))) fail(`node #${i}`, "malformed identities");
+    }
     if (!nodeBlock.has(i)) fail(`node #${i}`, "has no starting block");
   });
 
@@ -503,6 +515,7 @@ export function loadBytecode(m: BytecodeModule): Loaded {
     program,
     maxSteps: m.maxSteps,
     module: m.module,
+    revision: m.revision,
   };
 }
 

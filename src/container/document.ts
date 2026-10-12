@@ -21,6 +21,13 @@ export function loadDocument(source: string): LoadedDocument {
   if (!parsed.ok) {
     return { ast: null, space: null, manifest: null, diagnostics: parsed.diagnostics };
   }
+  return loadParsed(parsed.ast);
+}
+
+// The space and manifest of an already parsed document (the editor model parses, then
+// attaches identities, then loads).
+export function loadParsed(ast: DocumentAst): LoadedDocument {
+  const parsed = { ast };
   const built = buildSpace(parsed.ast);
   const frontMatterSpan = parsed.ast.frontMatter?.span;
   const interpreted = interpretManifest(parsed.ast.frontMatter?.text ?? null, frontMatterSpan);

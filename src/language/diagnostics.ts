@@ -3,6 +3,7 @@ import type { Span } from "./ast";
 export type Severity = "error" | "warning";
 
 export type Diagnostic = {
+  path?: string; // the file it is about, when that is not the file being checked (an imported module)
   code: string;
   severity: Severity;
   message: string;
