@@ -605,6 +605,8 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     now = state.steps + 1;
     lastAt = state.pose.position;
     lastFrame = frame.label;
+    // The machine's space and the innermost frame's body move together (call, return).
+    if (state.space !== frame.body.space) throw new Error("the machine and the frame stack disagree about the current space");
     const result = step(state, decode);
     state = result.state;
     if (result.entry) trace.push({ ...result.entry, effects, frame: lastFrame });
