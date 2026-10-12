@@ -14,6 +14,9 @@ export type Manifest = {
   readonly name: string | null;
   readonly start: Pose;
   readonly maxSteps: number;
+  // [imports] alias = "path.y3": modules this one uses, by the namespace it calls them.
+  // Paths live here so that sentences never contain one.
+  readonly imports: ReadonlyMap<string, string>;
 };
 
 export const DEFAULT_MAX_STEPS = 10_000;
@@ -22,6 +25,7 @@ export const DEFAULT_MANIFEST: Manifest = {
   name: null,
   start: { position: { x: 0, y: 0, z: 0 }, orientation: { forward: "south", up: "up" } },
   maxSteps: DEFAULT_MAX_STEPS,
+  imports: new Map(),
 };
 
 export const MANIFEST_CODES = {
@@ -31,7 +35,7 @@ export const MANIFEST_CODES = {
   START_IN_VOID: "Y3M004",
 } as const;
 
-const KNOWN_TOP_LEVEL = new Set(["name", "y3", "start", "limits", "experimental"]);
+const KNOWN_TOP_LEVEL = new Set(["name", "y3", "start", "limits", "experimental", "imports"]);
 const KNOWN_START = new Set(["plane", "cell", "facing", "up"]);
 const KNOWN_LIMITS = new Set(["steps", "future-forks"]);
 
@@ -137,10 +141,23 @@ export function interpretManifest(raw: string | null, span: Span = WHOLE_FILE): 
     }
   }
 
+  const imports = new Map<string, string>();
+  const rawImports = table["imports"];
+  if (rawImports !== undefined) {
+    if (!isRecord(rawImports)) {
+      error("[imports] must be a table of alias = \"path\"");
+    } else {
+      for (const [alias, path] of Object.entries(rawImports)) {
+        if (typeof path !== "string") error(`imports.${alias} must be a path string`);
+        else imports.set(alias, path);
+      }
+    }
+  }
+
   if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
     return { manifest: null, diagnostics };
   }
-  return { manifest: { name, start: { position, orientation: { forward, up } }, maxSteps }, diagnostics };
+  return { manifest: { name, start: { position, orientation: { forward, up } }, maxSteps, imports }, diagnostics };
 }
 
 // The start pose must be on an authored cell; starting in VOID is a document error.

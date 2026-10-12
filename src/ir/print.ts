@@ -1,4 +1,5 @@
 import type { Expr, Noun, Pattern, Stmt } from "./hir";
+import type { CompiledProgram } from "./program";
 import { showValue } from "../semantics/values";
 import { formatType } from "../types/types";
 
@@ -47,6 +48,18 @@ export function formatExpr(e: Expr, nouns: ReadonlyMap<number, string>): string 
         return `${sub(e.record)}.${e.field}`;
       case "Match":
         return `Match ${sub(e.scrutinee)} { ${e.arms.map((arm) => `${formatPattern(arm.pattern)} => ${sub(arm.body)}`).join("; ")} }`;
+      case "SetField":
+        return `SetField(${sub(e.record)}, ${e.field}, ${sub(e.value)})`;
+      case "ArrayLiteral":
+        return `[${e.elements.map(sub).join(", ")}]`;
+      case "Index":
+        return `Index(${sub(e.base)}, ${sub(e.index)})`;
+      case "SetIndex":
+        return `SetIndex(${sub(e.base)}, ${sub(e.index)}, ${sub(e.value)})`;
+      case "Slice":
+        return `Slice(${sub(e.base)}, ${sub(e.from)}, ${sub(e.to)})`;
+      case "Length":
+        return `Length(${sub(e.base)})`;
     }
   })();
   return `${body} : ${formatType(e.type)}`;
@@ -81,7 +94,22 @@ export function formatStmt(s: Stmt, nouns: ReadonlyMap<number, string>): string 
       return `TemporalAssert ${s.moment === "start" ? "처음:" : ""}${noun(s.noun)} = ${expr(s.value)}`;
     case "TemporalPromise":
       return `TemporalPromise ${noun(s.noun)} = ${expr(s.value)}`;
+    case "CallPlane":
+      return `CallPlane ${s.plane}(${s.args.map(expr).join(", ")})${s.results.length > 0 ? ` → ${s.results.map(noun).join(", ")}` : ""}`;
+    case "Return":
+      return `Return ${s.values.map(expr).join(", ")}`.trimEnd();
   }
+}
+
+// The main volume, then each callable plane under its signature.
+export function formatCompiledIr(program: CompiledProgram): string {
+  const parts = [formatProgramIr(program.cells.values(), program.nouns)];
+  for (const p of program.procedures.values()) {
+    const params = p.params.map((x) => `${x.name}#${x.noun}: ${formatType(x.type)}`).join(", ");
+    const results = p.results.length === 0 ? "" : ` → ${p.results.length === 1 ? formatType(p.results[0] as never) : `(${p.results.map(formatType).join(", ")})`}`;
+    parts.push(`${p.id}(${params})${results}\n${formatProgramIr(p.cells.values(), p.nouns)}`);
+  }
+  return parts.join("\n");
 }
 
 export function formatProgramIr(cells: Iterable<Stmt>, nouns: readonly Noun[]): string {

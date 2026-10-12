@@ -10,18 +10,50 @@ export type ExprAst =
   | { readonly kind: "int"; readonly value: bigint }
   | { readonly kind: "text"; readonly value: string }
   | { readonly kind: "bool"; readonly value: boolean } // 참, 거짓
-  | { readonly kind: "noun"; readonly name: string }
-  | { readonly kind: "anchored"; readonly anchor: TimeAnchor; readonly name: string }; // 처음의 N, 끝의 N
+  | { readonly kind: "noun"; readonly name: string } // a noun, or a constructor with no fields (None)
+  | { readonly kind: "anchored"; readonly anchor: TimeAnchor; readonly name: string } // 처음의 N, 끝의 N
+  | { readonly kind: "field"; readonly target: ExprAst; readonly name: string } // 위치의 가로
+  | { readonly kind: "index"; readonly target: ExprAst; readonly index: ExprAst }; // 수들의 0번, 수들의 i번
 
-// [이름공간 이름: 인자, …]: an explicit call. The colon is a syntactic boundary, not prose.
-export type CallAst = { readonly kind: "call"; readonly namespace: string; readonly name: string; readonly args: readonly ExprAst[] };
+// Where a value can be written: a noun, or a field or element inside one.
+export type PlaceStep = { readonly kind: "field"; readonly name: string } | { readonly kind: "index"; readonly index: ExprAst };
+export type PlaceAst = { readonly noun: string; readonly steps: readonly PlaceStep[] };
+
+// [이름: 인자, …], [이름공간 이름: 인자, …]: an explicit call (or construction). The
+// colon is a syntactic boundary, not prose.
+//
+// The words before the colon can sometimes be read two ways: [나이 계산: 3] is either
+// namespace 나이 and callable 계산, or target 나(이) and callable 계산. Morphology alone
+// cannot tell, so the parser keeps every well-formed reading (two-word callee first) and
+// name resolution takes the namespaced one only when that namespace exists.
+export type CallReading = {
+  readonly targets: readonly string[]; // nouns that receive the results: 몫과 나머지는 …
+  readonly callee: readonly string[]; // [name] or [namespace, name]
+};
+export type CallAst = { readonly kind: "call"; readonly readings: readonly CallReading[]; readonly args: readonly ExprAst[] };
+
+// A pattern in a match arm: _, a literal, or a name with optional sub-patterns. Whether
+// a bare name binds a local or names a constructor (None) is decided by name resolution.
+export type PatternAst =
+  | { readonly kind: "wildcard" }
+  | { readonly kind: "literal"; readonly value: ExprAst & { readonly kind: "int" | "text" | "bool" } }
+  | { readonly kind: "name"; readonly path: readonly string[]; readonly args: readonly PatternAst[] | null };
+
+// [N은 E에 따라: 패턴 → 값, …]
+export type MatchAst = {
+  readonly kind: "match";
+  readonly scrutinee: ExprAst;
+  readonly arms: readonly { readonly pattern: PatternAst; readonly body: ExprAst }[];
+};
 
 export type ActAst =
-  | { readonly kind: "assign"; readonly noun: string; readonly value: ExprAst | CallAst } // N은 E이다, [N은 ns f: …]
-  | { readonly kind: "call"; readonly call: CallAst } // [ns f: …]
+  | { readonly kind: "assign"; readonly place: PlaceAst; readonly value: ExprAst } // N은 E이다, N의 F는 E이다
+  | { readonly kind: "call"; readonly call: CallAst } // [f: …], [N은 f: …], [N과 M은 ns f: …]
+  | { readonly kind: "match"; readonly target: string; readonly match: MatchAst } // [N은 E에 따라: …]
+  | { readonly kind: "return"; readonly values: readonly ExprAst[] } // E을 돌려준다, E와 F를 돌려준다, 돌아간다
   | { readonly kind: "declare"; readonly noun: string } // N은 미정이다
-  | { readonly kind: "add"; readonly noun: string; readonly amount: ExprAst } // N에 E을 더한다
-  | { readonly kind: "subtract"; readonly noun: string; readonly amount: ExprAst } // N에서 E을 뺀다
+  | { readonly kind: "add"; readonly place: PlaceAst; readonly amount: ExprAst } // N에 E을 더한다
+  | { readonly kind: "subtract"; readonly place: PlaceAst; readonly amount: ExprAst } // N에서 E을 뺀다
   | { readonly kind: "say"; readonly value: ExprAst } // E을 말한다
   | { readonly kind: "receive"; readonly noun: string } // N이 다음에서 온다
   | { readonly kind: "send"; readonly noun: string } // N을 전으로 보낸다

@@ -46,13 +46,14 @@ export function endingOf(word: string): Ending | null {
 }
 
 // Particle pairs whose choice depends only on the preceding sound (orthography, D4).
-export type ParticlePair = "topic" | "subject" | "object" | "direction";
+export type ParticlePair = "topic" | "subject" | "object" | "direction" | "and";
 
 export const ALLOMORPHS: Readonly<Record<ParticlePair, { consonant: string; vowel: string }>> = {
   topic: { consonant: "은", vowel: "는" },
   subject: { consonant: "이", vowel: "가" },
   object: { consonant: "을", vowel: "를" },
   direction: { consonant: "으로", vowel: "로" },
+  and: { consonant: "과", vowel: "와" },
 };
 
 export function canonicalParticle(pair: ParticlePair, ending: Ending): string {

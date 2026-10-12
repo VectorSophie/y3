@@ -1,6 +1,6 @@
 import type { Compass, Relative, Turn } from "../space/orientation";
 import { canonicalParticle, endingOf, type ParticlePair } from "./korean";
-import type { ActAst, CallAst, ConditionAst, ExprAst, RelationAst, SentenceAst, TimeAnchor } from "./sentence-ast";
+import type { ActAst, CallAst, CallReading, ConditionAst, ExprAst, MatchAst, PatternAst, PlaceAst, PlaceStep, RelationAst, SentenceAst, TimeAnchor } from "./sentence-ast";
 
 // Parses one cell's sentence. Tense is read from the sentence-final form: present
 // tense is an act (it executes), past and future tense are relations (they constrain).
@@ -22,6 +22,8 @@ export const SENTENCE_CODES = {
   VERB_TENSE: "Y3G008",
   BAD_CONDITIONAL: "Y3G009",
   BAD_CALL: "Y3G012",
+  BAD_MATCH: "Y3G013",
+  BAD_RETURN: "Y3G014",
   ANCHOR_WRITE: "Y3G010",
   ANCHOR_TENSE: "Y3G011",
   TEMPORAL_LATER: "Y3T001",
@@ -53,9 +55,11 @@ const PARTICLES: readonly { form: string; role: Role; pair: ParticlePair | null 
   { form: "를", role: "object", pair: "object" },
   { form: "에", role: "target", pair: null },
   { form: "로", role: "direction", pair: "direction" },
+  { form: "과", role: "and", pair: "and" },
+  { form: "와", role: "and", pair: "and" },
 ];
 
-type Role = "subject" | "object" | "target" | "source" | "direction";
+type Role = "subject" | "object" | "target" | "source" | "direction" | "and";
 type Phrase = { stem: string; particle: string; role: Role; pair: ParticlePair | null };
 
 const TURN_WORDS: Readonly<Record<string, Turn>> = { 오른쪽: "right", 왼쪽: "left", 뒤: "around", 위: "up", 아래: "down" };
@@ -85,7 +89,7 @@ export const RESERVED_WORDS = new Set([
   ...Object.keys(FLOOR_WORDS),
 ]);
 
-const PRESENT_VERBS = new Set(["더한다", "뺀다", "말한다", "본다", "간다", "온다", "보낸다"]);
+const PRESENT_VERBS = new Set(["더한다", "뺀다", "말한다", "본다", "간다", "온다", "보낸다", "돌려준다", "돌아간다"]);
 const LATER_VERBS: Readonly<Record<string, string>> = {
   곱한다: "multiplication",
   나눈다: "division",
@@ -153,7 +157,7 @@ function phrase(word: string, issues: SentenceIssue[]): Phrase {
     }
   }
   if (!found) {
-    fail(SENTENCE_CODES.BAD_PHRASE, `'${word}' needs a particle (은/는, 이/가, 을/를, 에, 에서, 으로/로)`);
+    fail(SENTENCE_CODES.BAD_PHRASE, `'${word}' needs a particle (은/는, 이/가, 을/를, 에, 에서, 으로/로, 과/와)`);
   }
   lintParticle(found.stem, found.particle, found.pair, issues);
   return found;
@@ -178,10 +182,15 @@ function unquote(literal: string): string {
 }
 
 const ANCHORED = /^(처음|끝)의 (.+)$/u;
+const GENITIVE = "의 "; // X의 Y: Y of X (a field, an element, or a moment)
+const INDEX = /^(.+)번$/u; // 수들의 2번: element 2
 
 function noun(stem: string): string {
   if (ANCHORED.test(stem)) {
     fail(SENTENCE_CODES.ANCHOR_WRITE, `'${stem}' names a value at a moment in time; it can be read or constrained, never written`);
+  }
+  if (stem.includes(GENITIVE)) {
+    fail(SENTENCE_CODES.BAD_PHRASE, `'${stem}' is part of a value; this sentence speaks about a whole noun`);
   }
   if (RESERVED_WORDS.has(stem)) {
     fail(SENTENCE_CODES.RESERVED_NOUN, `'${stem}' is a reserved word and cannot name a value`);
@@ -192,9 +201,38 @@ function noun(stem: string): string {
   return stem;
 }
 
+// One step of a path: '가로' (a field) or '2번', 'i번' (an element).
+function step(part: string): PlaceStep {
+  const index = part.match(INDEX);
+  if (index) return { kind: "index", index: expr(index[1] ?? "") };
+  if (!NOUN_PATTERN.test(part) || RESERVED_WORDS.has(part)) fail(SENTENCE_CODES.BAD_PHRASE, `'${part}' is not a field name or an element ('2번')`);
+  return { kind: "field", name: part };
+}
+
+// 위치의 가로는 …, 수들의 0번은 …: a noun, or a place inside one.
+function place(stem: string): PlaceAst {
+  const [base, ...rest] = stem.split(GENITIVE);
+  if (base === "처음" || base === "끝") noun(stem); // a moment is never written
+  return { noun: noun(base ?? ""), steps: rest.map(step) };
+}
+
 function expr(stem: string): ExprAst {
-  const anchored = stem.match(ANCHORED);
-  if (anchored) return { kind: "anchored", anchor: anchored[1] as TimeAnchor, name: noun(anchored[2] ?? "") };
+  if (stem.includes(GENITIVE) && !stem.startsWith('"')) {
+    const parts = stem.split(GENITIVE);
+    const [base, ...rest] = parts;
+    let target: ExprAst;
+    if (base === "처음" || base === "끝") {
+      const anchored = rest.shift();
+      target = { kind: "anchored", anchor: base, name: noun(anchored ?? "") };
+    } else {
+      target = expr(base ?? "");
+    }
+    for (const part of rest) {
+      const s = step(part);
+      target = s.kind === "field" ? { kind: "field", target, name: s.name } : { kind: "index", target, index: s.index };
+    }
+    return target;
+  }
   if (/^-?\d+$/.test(stem)) return { kind: "int", value: BigInt(stem) };
   if (stem === "참" || stem === "거짓") return { kind: "bool", value: stem === "참" };
   if (stem.startsWith('"') && stem.endsWith('"') && stem.length >= 2) return { kind: "text", value: unquote(stem) };
@@ -292,11 +330,12 @@ function colonAt(text: string): number {
   return -1;
 }
 
-// Splits call arguments on ',' outside quoted texts.
-function callArguments(text: string): string[] {
-  const args: string[] = [];
+// Splits on `separator` outside quoted texts and parentheses.
+function splitTop(text: string, separator: string): string[] {
+  const parts: string[] = [];
   let current = "";
   let inQuote = false;
+  let depth = 0;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i] ?? "";
     if (inQuote && ch === "\\") {
@@ -305,34 +344,111 @@ function callArguments(text: string): string[] {
       continue;
     }
     if (ch === '"') inQuote = !inQuote;
-    if (ch === "," && !inQuote) {
-      args.push(current.trim());
+    if (!inQuote && ch === "(") depth += 1;
+    if (!inQuote && ch === ")") depth -= 1;
+    if (!inQuote && depth === 0 && text.startsWith(separator, i)) {
+      parts.push(current.trim());
       current = "";
+      i += separator.length - 1;
     } else {
       current += ch;
     }
   }
-  args.push(current.trim());
-  return args;
+  parts.push(current.trim());
+  return parts;
 }
 
-// [이름공간 이름: 인자, …] or [N은 이름공간 이름: 인자, …].
+// Joins "X의" with the word after it: "위치의 가로는" is one phrase.
+function mergeGenitives(words: readonly string[]): string[] {
+  const merged: string[] = [];
+  for (const word of words) {
+    const previous = merged[merged.length - 1];
+    if (previous !== undefined && previous.endsWith("의") && previous.length > 1 && !previous.endsWith('"의')) {
+      merged[merged.length - 1] = `${previous} ${word}`;
+    } else {
+      merged.push(word);
+    }
+  }
+  return merged;
+}
+
+// _ | literal | name [name] [ "(" pattern, … ")" ]
+function pattern(text: string): PatternAst {
+  const usage = "a pattern is '_', a literal, a name, or a constructor with patterns: 'Some(x)'";
+  if (text === "_") return { kind: "wildcard" };
+  const open = text.indexOf("(");
+  const head = (open < 0 ? text : text.slice(0, open)).trim();
+  if (open < 0 && (/^-?\d+$/.test(head) || head.startsWith('"') || head === "참" || head === "거짓")) {
+    const value = expr(head);
+    if (value.kind !== "int" && value.kind !== "text" && value.kind !== "bool") fail(SENTENCE_CODES.BAD_MATCH, usage);
+    return { kind: "literal", value };
+  }
+  const path = head.split(" ").filter((w) => w.length > 0);
+  if (path.length === 0 || path.length > 2 || !path.every((w) => NOUN_PATTERN.test(w))) fail(SENTENCE_CODES.BAD_MATCH, usage);
+  if (open < 0) return { kind: "name", path, args: null };
+  if (!text.endsWith(")")) fail(SENTENCE_CODES.BAD_MATCH, `'${text}' is missing its closing ')'`);
+  const inner = text.slice(open + 1, -1).trim();
+  return { kind: "name", path, args: inner.length === 0 ? [] : splitTop(inner, ",").map(pattern) };
+}
+
+// [N은 E에 따라: 패턴 → 값, …]
+function parseMatch(head: string[], tail: string, issues: SentenceIssue[]): ActAst {
+  const usage = "a match is written '[N은 E에 따라: 패턴 → 값, …]'";
+  if (head.length !== 3) fail(SENTENCE_CODES.BAD_MATCH, usage);
+  const target = phrase(head[0] ?? "", issues);
+  const scrutinee = phrase(head[1] ?? "", issues);
+  if (target.role !== "subject" || scrutinee.role !== "target") fail(SENTENCE_CODES.BAD_MATCH, usage);
+  const arms = tail.length === 0 ? [] : splitTop(tail, ",");
+  const match: MatchAst = {
+    kind: "match",
+    scrutinee: expr(scrutinee.stem),
+    arms: arms.map((arm) => {
+      const arrow = splitTop(arm.replace("->", "→"), "→");
+      if (arrow.length !== 2 || !arrow[0] || !arrow[1]) fail(SENTENCE_CODES.BAD_MATCH, `an arm is written '패턴 → 값', not '${arm}'`);
+      return { pattern: pattern(arrow[0]), body: expr(arrow[1]) };
+    }),
+  };
+  if (match.arms.length === 0) fail(SENTENCE_CODES.BAD_MATCH, `a match needs at least one arm: ${usage}`);
+  return { kind: "match", target: noun(target.stem), match };
+}
+
+// [f: …], [ns f: …], [N은 f: …], [N과 M은 ns f: …]. Leading phrases with 과/와 and then
+// 은/는/이/가 name the nouns that receive the results; one or two words name the callee.
 function parseCall(words: string[], issues: SentenceIssue[]): ActAst {
-  const usage = "a call is written '[이름공간 이름: 인자, …]' or '[N은 이름공간 이름: 인자, …]'";
+  const usage = "a call is written '[이름: 인자, …]', '[이름공간 이름: 인자, …]' or '[N은 이름: 인자, …]'";
   const text = words.join(" ");
   const colon = colonAt(text);
-  const head = text.slice(0, colon).trim().split(" ").filter((w) => w.length > 0);
+  const head = mergeGenitives(text.slice(0, colon).trim().split(" ").filter((w) => w.length > 0));
   const tail = text.slice(colon + 1).trim();
-  const args = tail.length === 0 ? [] : callArguments(tail);
+  if (head[head.length - 1] === "따라") return parseMatch(head, tail, issues);
+  const args = tail.length === 0 ? [] : splitTop(tail, ",");
   if (args.some((arg) => arg.length === 0)) fail(SENTENCE_CODES.BAD_CALL, `an argument is missing: ${usage}`);
-  const target = head.length === 3 ? head[0] ?? "" : null;
-  const [namespace, name] = head.slice(-2);
-  if ((head.length !== 2 && head.length !== 3) || !namespace || !name) fail(SENTENCE_CODES.BAD_CALL, usage);
-  const call: CallAst = { kind: "call", namespace, name, args: args.map(expr) };
-  if (target === null) return { kind: "call", call };
-  const subject = phrase(target, issues);
-  if (subject.role !== "subject") fail(SENTENCE_CODES.BAD_CALL, usage);
-  return { kind: "assign", noun: noun(subject.stem), value: call };
+
+  // Targets: phrases in 과/와, then one in 은/는/이/가; or none at all.
+  const targetsOf = (words: readonly string[]): string[] | null => {
+    const lint: SentenceIssue[] = [];
+    const found: string[] = [];
+    for (const [i, word] of words.entries()) {
+      const p = PARTICLES.find((x) => word.endsWith(x.form) && word.length > x.form.length);
+      const role = i === words.length - 1 ? "subject" : "and";
+      if (p?.role !== role) return null;
+      const stem = phrase(word, lint).stem;
+      if (!NOUN_PATTERN.test(stem) || RESERVED_WORDS.has(stem)) return null;
+      found.push(stem);
+    }
+    issues.push(...lint);
+    return found;
+  };
+  const readings: CallReading[] = [];
+  for (const size of [2, 1]) {
+    const callee = head.slice(-size);
+    if (callee.length !== size || !callee.every((w) => NOUN_PATTERN.test(w))) continue;
+    const targets = targetsOf(head.slice(0, head.length - size));
+    if (targets) readings.push({ targets, callee });
+  }
+  if (readings.length === 0) fail(SENTENCE_CODES.BAD_CALL, usage);
+  const call: CallAst = { kind: "call", readings, args: args.map(expr) };
+  return { kind: "call", call };
 }
 
 function parseAct(words: string[], issues: SentenceIssue[]): ActAst {
@@ -362,7 +478,7 @@ function parseAct(words: string[], issues: SentenceIssue[]): ActAst {
     if (subject.stem === "여기" && value === "처음") return { kind: "anchor" };
     if (subject.stem === "끝" && value === "처음") return { kind: "back" };
     if (value === "미정") return { kind: "declare", noun: noun(subject.stem) };
-    return { kind: "assign", noun: noun(subject.stem), value: expr(value) };
+    return { kind: "assign", place: place(subject.stem), value: expr(value) };
   }
 
   const later = LATER_VERBS[last];
@@ -373,15 +489,30 @@ function parseAct(words: string[], issues: SentenceIssue[]): ActAst {
     fail(SENTENCE_CODES.UNKNOWN_SENTENCE, `unknown sentence: no known predicate '${last}'`);
   }
 
+  if (last === "돌아간다") {
+    if (rest.length > 0) fail(SENTENCE_CODES.BAD_RETURN, "'돌아간다' returns nothing and takes no phrases; to return values write 'E을 돌려준다'");
+    return { kind: "return", values: [] };
+  }
+  if (last === "돌려준다") {
+    // E을 돌려준다, E와 F를 돌려준다: every phrase but the last is joined by 과/와.
+    const usage = "values are returned as 'E을 돌려준다' or 'E와 F를 돌려준다'";
+    if (rest.length === 0) fail(SENTENCE_CODES.BAD_RETURN, `${usage}; '돌아간다' returns nothing`);
+    const phrases = rest.map((word) => phrase(word, issues));
+    phrases.forEach((p, i) => {
+      if (p.role !== (i === phrases.length - 1 ? "object" : "and")) fail(SENTENCE_CODES.BAD_RETURN, usage);
+    });
+    return { kind: "return", values: phrases.map((p) => expr(p.stem)) };
+  }
+
   const found = roles(rest, issues);
   switch (last) {
     case "더한다": {
       expectRoles(last, found, ["target", "object"], "N에 E을 더한다");
-      return { kind: "add", noun: noun(found.get("target")?.stem ?? ""), amount: expr(found.get("object")?.stem ?? "") };
+      return { kind: "add", place: place(found.get("target")?.stem ?? ""), amount: expr(found.get("object")?.stem ?? "") };
     }
     case "뺀다": {
       expectRoles(last, found, ["source", "object"], "N에서 E을 뺀다");
-      return { kind: "subtract", noun: noun(found.get("source")?.stem ?? ""), amount: expr(found.get("object")?.stem ?? "") };
+      return { kind: "subtract", place: place(found.get("source")?.stem ?? ""), amount: expr(found.get("object")?.stem ?? "") };
     }
     case "온다": {
       expectRoles(last, found, ["subject", "source"], "N이 다음에서 온다");
@@ -458,16 +589,9 @@ export function parseSentence(text: string): SentenceResult {
       fail(SENTENCE_CODES.NO_FULL_STOP, "a sentence ends with '.'");
     }
     const body = trimmed.endsWith(".") ? trimmed.slice(0, -1) : trimmed;
-    // "처음의 N…" and "끝의 N…" are one noun phrase anchored in time.
-    const words: string[] = [];
-    for (const word of eojeols(body)) {
-      const previous = words[words.length - 1];
-      if (previous === "처음의" || previous === "끝의") {
-        words[words.length - 1] = `${previous} ${word}`;
-      } else {
-        words.push(word);
-      }
-    }
+    // "X의 Y…" is one noun phrase: a field (위치의 가로), an element (수들의 0번) or a
+    // moment (처음의 N, 끝의 N).
+    const words = mergeGenitives(eojeols(body));
     if (words.length === 0) {
       fail(SENTENCE_CODES.UNKNOWN_SENTENCE, "empty sentence");
     }

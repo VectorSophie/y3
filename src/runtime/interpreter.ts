@@ -1,13 +1,14 @@
 import type { Coordinate, Manifest, Pose } from "../space/manifest";
 import { PRINTLN } from "../ir/callables";
 import type { CallableId, Expr, Moment, NounId, Stmt } from "../ir/hir";
-import { coordinateKey, type CompiledProgram } from "../ir/program";
-import { renderValue, sameValue, UNIT, type ConcreteValue } from "../semantics/values";
+import { coordinateKey, type Body, type CompiledProgram } from "../ir/program";
+import { renderValue, sameValue, showValue, UNIT, type ConcreteValue } from "../semantics/values";
 import { TemporalStore, type Resolution, type SymbolInfo } from "../temporal/store";
 import { carriesCause, literal, symbolsOf, TermError, type SymbolicTerm } from "../temporal/terms";
-import { concrete, evaluate, type EvalEnv, type Value } from "./evaluate";
+import { concrete, evaluate, RuntimeFault, type EvalEnv, type Value } from "./evaluate";
 import type { DecodeResult, Instruction } from "./instructions";
 import { createMachine, step } from "./machine";
+import { nextPose } from "./movement";
 import type { ProgramOutcome, TemporalStatus } from "./program-outcome";
 import type { TraceEntry } from "./trace";
 
@@ -39,10 +40,10 @@ type Promise = { readonly noun: NounId; readonly term: SymbolicTerm; readonly ma
 type EndRead = { readonly noun: NounId; readonly symbol: SymbolicTerm; readonly madeAt: number; readonly sentence: string };
 type FixedPoint = { readonly madeAt: number; readonly sentence: string };
 
-// One iteration of a loop, or the whole run. It remembers how it began, what it wrote,
-// and what must be closed when it ends.
+// One iteration of a loop, or a whole activation (the run, or one call of a callable
+// plane). It remembers how it began, what it wrote, and what must be closed when it ends.
 type Scope = {
-  readonly anchor: Pose | null; // null for the run
+  readonly anchor: Pose | null; // null for the run or a call
   iteration: number;
   start: Map<NounId, Version>; // 처음: the versions current when this iteration began
   written: Set<NounId>;
@@ -52,6 +53,22 @@ type Scope = {
 };
 
 type Slot = { readonly id: string; readonly noun: NounId; readonly symbol: SymbolicTerm; readonly openedAt: number };
+
+// One activation of a body: the main volume (the run), or one call of a callable plane.
+// Its nouns, cycles and channels are its own; a lexical scope is a body, and a frame is
+// one run of it. Temporal symbols are not frame-local: they live in the store, so a
+// value can leave a call still symbolic and be determined after the frame is gone.
+type Frame = {
+  readonly activation: number; // 0 for the run, then 1, 2, … for each call
+  readonly label: string | null; // "제곱#2"; null for the main volume
+  readonly body: Body;
+  readonly current: Map<NounId, Version>;
+  readonly root: Scope; // the run, or the call: obligations made with no open cycle fall due when it ends
+  readonly cycles: Scope[];
+  readonly slots: Map<NounId, Slot[]>; // per noun, most recent last
+  readonly returnTo: Pose | null; // the call cell's pose in the caller: position and full orientation
+  readonly results: readonly NounId[]; // the caller's nouns that receive the returned values
+};
 type Line = { text: string | null; term: SymbolicTerm | null; heldSince: number | null };
 
 export type Effect =
@@ -64,6 +81,9 @@ export type Effect =
   | { readonly kind: "back"; readonly to: Coordinate }
   | { readonly kind: "leave"; readonly anchor: Coordinate }
   | { readonly kind: "end" }
+  // calls
+  | { readonly kind: "call"; readonly frame: string; readonly args: readonly string[] }
+  | { readonly kind: "return"; readonly frame: string; readonly values: readonly string[] }
   // present execution on symbolic values
   | { readonly kind: "declare"; readonly name: string; readonly symbol: string }
   | { readonly kind: "bind"; readonly name: string; readonly term: string }
@@ -92,7 +112,8 @@ export type Effect =
   | { readonly kind: "unresolved"; readonly symbols: readonly string[] }
   | { readonly kind: "ambiguous"; readonly symbols: readonly string[] };
 
-export type ProgramTraceEntry = TraceEntry & { readonly effects: readonly Effect[] };
+// `frame` names the activation the cell ran in ("제곱#2"); null for the main volume.
+export type ProgramTraceEntry = TraceEntry & { readonly effects: readonly Effect[]; readonly frame: string | null };
 
 export type SymbolSummary = {
   readonly label: string;
@@ -107,6 +128,7 @@ export type SymbolSummary = {
 
 // One semantic version of a noun and its def-use record.
 export type VersionSummary = {
+  readonly frame?: string; // the call that defined it; absent for the main volume
   readonly noun: string;
   readonly index: number;
   readonly definedAt: number;
@@ -123,7 +145,6 @@ export type ProgramResult = {
   readonly trace: readonly ProgramTraceEntry[];
 };
 
-class RuntimeFault extends Error {}
 class Stopped extends Error {} // a temporal stop (UNRESOLVED, PARADOX) mid-statement
 
 function sameCoordinate(a: Coordinate, b: Coordinate): boolean {
@@ -134,16 +155,32 @@ function at(c: Coordinate): string {
   return `(${c.x},${c.y},${c.z})`;
 }
 
+// Where a call starts: the callable plane's first cell, facing 남, up 위.
+const CALL_ENTRY: Pose = { position: { x: 0, y: 0, z: 0 }, orientation: { forward: "south", up: "up" } };
+
 export function runProgram(program: CompiledProgram, manifest: Manifest, options: { maxSteps?: number } = {}): ProgramResult {
   const store = new TemporalStore();
-  const names = new Map(program.nouns.map((noun) => [noun.id, noun.name]));
+  const bodies = [program, ...program.procedures.values()];
+  const names = new Map(bodies.flatMap((body) => body.nouns.map((noun) => [noun.id, noun.name] as const)));
   const nameOf = (id: NounId) => names.get(id) ?? `#${id}`;
-  const current = new Map<NounId, Version>();
-  const history: Version[] = [];
+  const history: (Version & { readonly frame: string | null })[] = [];
   const lines: Line[] = [];
-  const run: Scope = { anchor: null, iteration: 1, start: new Map(), written: new Set(), promises: [], endReads: [], fixed: [] };
-  const cycles: Scope[] = [];
-  const slots = new Map<NounId, Slot[]>(); // per noun, most recent last
+  const newScope = (): Scope => ({ anchor: null, iteration: 1, start: new Map(), written: new Set(), promises: [], endReads: [], fixed: [] });
+  const main: Frame = { activation: 0, label: null, body: program, current: new Map(), root: newScope(), cycles: [], slots: new Map(), returnTo: null, results: [] };
+  const run = main.root;
+  const frames: Frame[] = [main];
+  let activations = 0;
+  // The innermost frame's state, rebound on every call and return.
+  let frame = main;
+  let current = main.current;
+  let cycles = main.cycles;
+  let slots = main.slots;
+  const enter = (f: Frame) => {
+    frame = f;
+    current = f.current;
+    cycles = f.cycles;
+    slots = f.slots;
+  };
   let slotCount = 0;
   let effects: Effect[] = [];
   let now = 0; // the step being executed
@@ -154,14 +191,24 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     if (!stop) stop = { status, message };
   };
 
-  const scope = (): Scope => cycles[cycles.length - 1] ?? run;
-  const dueLabel = (s: Scope) => (s.anchor ? `end of 처음 ${at(s.anchor.position)} #${s.iteration}` : "end of run");
+  const scope = (): Scope => cycles[cycles.length - 1] ?? frame.root;
+  const dueLabel = (s: Scope) =>
+    s.anchor ? `end of 처음 ${at(s.anchor.position)} #${s.iteration}` : frame.label === null ? "end of run" : `end of call ${frame.label}`;
 
   // A binding, made concrete whenever the store can justify it.
   const settle = (binding: Binding): Binding => {
     if (binding.kind === "concrete") return binding;
     const value = store.resolve(binding.term);
     return value ? concrete(value) : binding;
+  };
+  const describe = (binding: Binding): string => {
+    const settled = settle(binding);
+    return settled.kind === "concrete" ? renderValue(settled.value) : store.format(settled.term);
+  };
+  // As a trace shows it: text quoted.
+  const show = (binding: Binding): string => {
+    const settled = settle(binding);
+    return settled.kind === "concrete" ? showValue(settled.value) : store.format(settled.term);
   };
   const termOf = (binding: Binding): SymbolicTerm => (binding.kind === "concrete" ? literal(binding.value) : binding.term);
   const pendingLabels = (term: SymbolicTerm) => store.pending(term).map((info) => info.label);
@@ -186,8 +233,8 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     const previous = current.get(noun);
     const next: Version = { noun, index: previous ? previous.index + 1 : 0, binding, definedAt: now, uses: [] };
     current.set(noun, next);
-    history.push(next);
-    run.written.add(noun);
+    history.push({ ...next, frame: frame.label, uses: next.uses });
+    frame.root.written.add(noun);
     for (const cycle of cycles) cycle.written.add(noun);
   };
 
@@ -444,7 +491,55 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
         effects.push({ kind: "back", to: (cycle.anchor as Pose).position });
         return { op: "jump", to: cycle.anchor as Pose };
       }
+      case "CallPlane": {
+        const procedure = program.procedures.get(stmt.plane);
+        if (!procedure) throw new Error(`no callable plane ${stmt.plane}; the compiler should have caught this`);
+        // Arguments are evaluated in the caller, and may be symbolic: a call passes a
+        // value through, it does not need it now.
+        const args = stmt.args.map((arg) => settle(evaluate(arg, env)));
+        activations += 1;
+        const callee: Frame = {
+          activation: activations,
+          label: `${procedure.name}#${activations}`,
+          body: procedure,
+          current: new Map(),
+          root: newScope(),
+          cycles: [],
+          slots: new Map(),
+          returnTo: pose,
+          results: stmt.results,
+        };
+        frames.push(callee);
+        enter(callee);
+        procedure.params.forEach((p, i) => {
+          const arg = args[i] as Value;
+          if (arg.kind === "symbolic") store.noteUse(arg.term, now);
+          define(p.noun, arg);
+        });
+        effects.push({ kind: "call", frame: callee.label as string, args: procedure.params.map((p, i) => `${p.name} := ${show(args[i] as Value)}`) });
+        return { op: "call", space: procedure.space, to: CALL_ENTRY, label: callee.label as string };
+      }
+      case "Return": {
+        const values = stmt.values.map((v) => settle(evaluate(v, env)));
+        const returning = frame;
+        if (!returning.returnTo) throw new RuntimeFault("only a callable plane returns; the main volume ends with '끝이다'");
+        // The call is over: its open cycles, then its own obligations, fall due now.
+        while (cycles.length > 0 && !stop) leaveInnermost();
+        endIteration(returning.root);
+        for (const [, open] of slots) {
+          for (const slot of open) effects.push({ kind: "unanswered", slot: slot.id, symbol: store.format(slot.symbol) });
+        }
+        effects.push({ kind: "return", frame: returning.label as string, values: values.map(show) });
+        frames.pop();
+        const caller = frames[frames.length - 1] as Frame;
+        enter(caller);
+        // A plane that returns nothing gives () to a single receiving noun.
+        returning.results.forEach((noun, i) => assign(noun, values[i] ?? concrete(UNIT)));
+        // Back to the call cell's pose, orientation and all, then on as from any cell.
+        return { op: "return", space: caller.body.space, to: nextPose(returning.returnTo, forward), label: caller.label };
+      }
       case "End": {
+        if (frames.length > 1) throw new RuntimeFault("'끝이다' ends the program; a callable plane returns with '돌려준다' or '돌아간다'");
         while (cycles.length > 0 && !stop) leaveInnermost();
         endIteration(run);
         effects.push({ kind: "end" });
@@ -489,7 +584,7 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
   };
 
   const decode = (_text: string, pose: Pose): DecodeResult => {
-    const stmt = program.cells.get(coordinateKey(pose.position));
+    const stmt = frame.body.cells.get(coordinateKey(pose.position));
     if (!stmt) return { error: "this cell was not compiled" };
     sentence = stmt.at.source;
     try {
@@ -504,23 +599,27 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
   let state = createMachine(program.space, manifest, options);
   const trace: ProgramTraceEntry[] = [];
   let lastAt: Coordinate = state.pose.position;
+  let lastFrame: string | null = null;
   while (!state.outcome && !stop) {
     effects = [];
     now = state.steps + 1;
     lastAt = state.pose.position;
-    const result = step(program.space, state, decode);
+    lastFrame = frame.label;
+    const result = step(state, decode);
     state = result.state;
-    if (result.entry) trace.push({ ...result.entry, effects });
+    if (result.entry) trace.push({ ...result.entry, effects, frame: lastFrame });
   }
 
   // A temporal stop happens while a cell runs; it outranks whatever the machine did next.
   const finalStop = stop as { status: TemporalStatus; message: string } | null;
-  const outcome: ProgramOutcome = finalStop
+  const ended: ProgramOutcome = finalStop
     ? { status: finalStop.status, steps: state.steps, at: lastAt, message: finalStop.message }
     : (state.outcome as ProgramOutcome);
+  // An outcome inside a call says which activation it happened in.
+  const outcome: ProgramOutcome = lastFrame === null ? ended : { ...ended, frame: lastFrame };
 
   const values = new Map<string, ConcreteValue>();
-  for (const [noun, v] of current) {
+  for (const [noun, v] of main.current) {
     const settled = settle(v.binding);
     if (settled.kind === "concrete") values.set(nameOf(noun), settled.value);
   }
@@ -534,17 +633,20 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     loop: info.selfLoop,
     mark: info.value && info.selfLoop ? "SELF_CAUSED" : info.retroactive ? "RETRO" : null,
   });
-  const describe = (binding: Binding): string => {
-    const settled = settle(binding);
-    return settled.kind === "concrete" ? renderValue(settled.value) : store.format(settled.term);
-  };
 
   return {
     outcome,
     output: lines.map((line) => line.text ?? "?"),
     values,
     symbols: store.all().map(summarize),
-    versions: history.map((v) => ({ noun: nameOf(v.noun), index: v.index, definedAt: v.definedAt, value: describe(v.binding), uses: [...v.uses] })),
+    versions: history.map((v) => ({
+      ...(v.frame === null ? {} : { frame: v.frame }),
+      noun: nameOf(v.noun),
+      index: v.index,
+      definedAt: v.definedAt,
+      value: describe(v.binding),
+      uses: [...v.uses],
+    })),
     trace,
   };
 }

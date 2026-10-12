@@ -14,7 +14,9 @@ export type Type =
   | { readonly kind: "prim"; readonly name: PrimName }
   | { readonly kind: "var"; readonly id: number }
   | { readonly kind: "named"; readonly name: string; readonly args: readonly Type[] } // a TypeDef applied to arguments
-  | { readonly kind: "param"; readonly name: string }; // only inside definitions and signatures
+  | { readonly kind: "param"; readonly name: string } // only inside definitions and signatures
+  | { readonly kind: "array"; readonly element: Type; readonly length: number } // [T; N]: owns its elements
+  | { readonly kind: "slice"; readonly element: Type }; // []T: a view of some array's elements
 
 export const BOOL: Type = { kind: "prim", name: "Bool" };
 export const INT: Type = { kind: "prim", name: "Int" };
@@ -27,6 +29,37 @@ export function named(name: string, ...args: Type[]): Type {
 
 export function param(name: string): Type {
   return { kind: "param", name };
+}
+
+export function arrayOf(element: Type, length: number): Type {
+  return { kind: "array", element, length };
+}
+
+export function sliceOf(element: Type): Type {
+  return { kind: "slice", element };
+}
+
+// The element type of an array or a slice, or null.
+export function elementOf(type: Type): Type | null {
+  return type.kind === "array" || type.kind === "slice" ? type.element : null;
+}
+
+// Rebuilds a type with its immediate component types mapped.
+function mapParts(type: Type, f: (part: Type) => Type): Type {
+  switch (type.kind) {
+    case "named":
+      return { kind: "named", name: type.name, args: type.args.map(f) };
+    case "array":
+      return { kind: "array", element: f(type.element), length: type.length };
+    case "slice":
+      return { kind: "slice", element: f(type.element) };
+    default:
+      return type;
+  }
+}
+
+function parts(type: Type): readonly Type[] {
+  return type.kind === "named" ? type.args : type.kind === "array" || type.kind === "slice" ? [type.element] : [];
 }
 
 // Algebraic data types. A sum type is a tagged union of variants; each variant carries
@@ -70,6 +103,12 @@ export class TypeTable {
     this.defs.set(def.name, def);
   }
 
+  // Completes a definition declared earlier by name (declarations may refer to each other).
+  replace(def: TypeDef): void {
+    if (!this.defs.has(def.name)) throw new Error(`type ${def.name} was never declared`);
+    this.defs.set(def.name, def);
+  }
+
   get(name: string): TypeDef | null {
     return this.defs.get(name) ?? null;
   }
@@ -80,10 +119,8 @@ export function substituteParams(type: Type, args: ReadonlyMap<string, Type>): T
   switch (type.kind) {
     case "param":
       return args.get(type.name) ?? type;
-    case "named":
-      return { kind: "named", name: type.name, args: type.args.map((arg) => substituteParams(arg, args)) };
     default:
-      return type;
+      return mapParts(type, (part) => substituteParams(part, args));
   }
 }
 
@@ -97,6 +134,10 @@ export function formatType(type: Type): string {
       return type.name;
     case "named":
       return type.args.length === 0 ? type.name : `${type.name}<${type.args.map(formatType).join(", ")}>`;
+    case "array":
+      return `[${formatType(type.element)}; ${type.length}]`;
+    case "slice":
+      return `[]${formatType(type.element)}`;
   }
 }
 
@@ -121,10 +162,8 @@ export class Unifier {
         const solved = this.solutions.get(type.id);
         return solved ? this.resolve(solved) : type;
       }
-      case "named":
-        return { kind: "named", name: type.name, args: type.args.map((arg) => this.resolve(arg)) };
       default:
-        return type;
+        return mapParts(type, (part) => this.resolve(part));
     }
   }
 
@@ -136,9 +175,15 @@ export class Unifier {
     if (a.kind === "var") return this.bind(a.id, b, a, b);
     if (b.kind === "var") return this.bind(b.id, a, a, b);
     if (a.kind === "prim" && b.kind === "prim") return a.name === b.name ? null : { expected: a, found: b };
-    if (a.kind === "named" && b.kind === "named" && a.name === b.name && a.args.length === b.args.length) {
-      for (let i = 0; i < a.args.length; i += 1) {
-        if (this.unify(a.args[i] as Type, b.args[i] as Type)) return { expected: this.resolve(a), found: this.resolve(b) };
+    const sameShape =
+      (a.kind === "named" && b.kind === "named" && a.name === b.name && a.args.length === b.args.length) ||
+      (a.kind === "array" && b.kind === "array" && a.length === b.length) ||
+      (a.kind === "slice" && b.kind === "slice");
+    if (sameShape) {
+      const pa = parts(a);
+      const pb = parts(b);
+      for (let i = 0; i < pa.length; i += 1) {
+        if (this.unify(pa[i] as Type, pb[i] as Type)) return { expected: this.resolve(a), found: this.resolve(b) };
       }
       return null;
     }
@@ -154,8 +199,7 @@ export class Unifier {
   private occurs(id: number, type: Type): boolean {
     const t = this.resolve(type);
     if (t.kind === "var") return t.id === id;
-    if (t.kind === "named") return t.args.some((arg) => this.occurs(id, arg));
-    return false;
+    return parts(t).some((part) => this.occurs(id, part));
   }
 
   // A definition or signature with its parameters replaced by fresh variables.

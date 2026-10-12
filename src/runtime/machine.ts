@@ -10,6 +10,7 @@ import type { TraceEntry } from "./trace";
 // new state.
 
 export type MachineState = {
+  readonly space: Space; // the space the pointer is in: the volume, or a callable plane's
   readonly pose: Pose;
   readonly steps: number;
   readonly maxSteps: number;
@@ -24,6 +25,7 @@ export function createMachine(space: Space, manifest: Manifest, options: { maxSt
   const { x, y, z } = pose.position;
   const start = lookup(space, x, y, z);
   return {
+    space,
     pose,
     steps: 0,
     maxSteps,
@@ -31,10 +33,11 @@ export function createMachine(space: Space, manifest: Manifest, options: { maxSt
   };
 }
 
-export function step(space: Space, state: MachineState, decode: Decoder): StepResult {
+export function step(state: MachineState, decode: Decoder): StepResult {
   if (state.outcome) {
     return { state, entry: null };
   }
+  const { space } = state;
   const { position } = state.pose;
   const here = lookup(space, position.x, position.y, position.z);
   if (here.kind === "void") {
@@ -67,15 +70,17 @@ export function step(space: Space, state: MachineState, decode: Decoder): StepRe
     next,
   };
 
+  // A call or a return moves the pointer into another space.
+  const nextSpace = instruction.op === "call" || instruction.op === "return" ? instruction.space : space;
   let outcome: Outcome | null = null;
   if (isEnd) {
     outcome = { status: "HALT", steps, at: position };
-  } else if (lookup(space, next.position.x, next.position.y, next.position.z).kind === "void") {
+  } else if (lookup(nextSpace, next.position.x, next.position.y, next.position.z).kind === "void") {
     outcome = { status: "VOID", steps, at: next.position, from: position };
   } else if (steps >= state.maxSteps) {
     outcome = { status: "STEP_LIMIT", steps, pose: next };
   }
-  return { state: { ...state, pose: next, steps, outcome }, entry };
+  return { state: { ...state, space: nextSpace, pose: next, steps, outcome }, entry };
 }
 
 export type RunResult = { readonly outcome: Outcome; readonly state: MachineState; readonly trace: TraceEntry[] };
@@ -89,7 +94,7 @@ export function run(
   let state = createMachine(space, manifest, options);
   const trace: TraceEntry[] = [];
   while (!state.outcome) {
-    const result = step(space, state, decode);
+    const result = step(state, decode);
     state = result.state;
     if (result.entry && options.trace !== false) {
       trace.push(result.entry);

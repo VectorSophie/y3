@@ -24,6 +24,7 @@ export type Noun = { readonly id: NounId; readonly name: string; type: Type };
 export type Moment = "start" | "end"; // 처음, 끝 of the innermost iteration (or the run)
 
 export type CallableId = string; // e.g. "std.io.println"
+export type PlaneId = string; // a callable plane: "<module>.<plane>", e.g. "main.제곱"
 
 export type Pattern =
   | { readonly kind: "wildcard" }
@@ -50,6 +51,14 @@ export type Expr = Typed &
     | { readonly node: "Construct"; readonly typeName: string; readonly variant: string | null; readonly args: readonly Expr[] }
     | { readonly node: "Field"; readonly record: Expr; readonly field: string; index: number } // index: resolved by the checker
     | { readonly node: "Match"; readonly scrutinee: Expr; readonly arms: readonly { readonly pattern: Pattern; readonly body: Expr }[] }
+    // A record with one field replaced: values are values, so this is a new record.
+    | { readonly node: "SetField"; readonly record: Expr; readonly field: string; index: number; readonly value: Expr }
+    // Arrays [T; N] and slices []T. An array literal owns new storage; a slice views it.
+    | { readonly node: "ArrayLiteral"; readonly elements: readonly Expr[] }
+    | { readonly node: "Index"; readonly base: Expr; readonly index: Expr } // an array's or a slice's element
+    | { readonly node: "SetIndex"; readonly base: Expr; readonly index: Expr; readonly value: Expr } // a new array, one element replaced
+    | { readonly node: "Slice"; readonly base: Expr; readonly from: Expr; readonly to: Expr } // elements [from, to) as a view
+    | { readonly node: "Length"; readonly base: Expr }
   );
 
 type Located = { readonly at: Provenance };
@@ -71,6 +80,12 @@ export type Stmt = Located &
     | { readonly node: "TemporalReceive"; readonly noun: NounId } // a value from later
     | { readonly node: "TemporalSend"; readonly noun: NounId } // back to the most recent receive
     | { readonly node: "TemporalFixedPoint" } // 처음은 끝이었다
+    // Calls to callable planes. A call allocates a frame: the caller's pose (position
+    // and full orientation), the arguments as the callee's parameter nouns, and the
+    // callee's locals. Returning restores the pose and writes the results to `results`
+    // in the caller (fewer results than values: the rest are discarded).
+    | { readonly node: "CallPlane"; readonly plane: PlaneId; readonly args: readonly Expr[]; readonly results: readonly NounId[] }
+    | { readonly node: "Return"; readonly values: readonly Expr[] }
   );
 
 export type ExprNode = Expr["node"];
@@ -85,6 +100,22 @@ export function childExprs(item: Stmt | Expr): Expr[] {
       return [item.value];
     case "Eval":
       return [item.expr];
+    case "CallPlane":
+      return [...item.args];
+    case "Return":
+      return [...item.values];
+    case "SetField":
+      return [item.record, item.value];
+    case "ArrayLiteral":
+      return [...item.elements];
+    case "Index":
+      return [item.base, item.index];
+    case "SetIndex":
+      return [item.base, item.index, item.value];
+    case "Slice":
+      return [item.base, item.from, item.to];
+    case "Length":
+      return [item.base];
     case "Branch":
       return [item.condition];
     case "Add":

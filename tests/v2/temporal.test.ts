@@ -178,6 +178,6 @@ describe("layering", () => {
   it("keeps ConcreteValue concrete: plain data, never a symbol or a term", () => {
     const source = readFileSync(join(__dirname, "..", "..", "src", "semantics", "values.ts"), "utf8");
     const declaration = source.match(/^export type ConcreteValue =[\s\S]*?;$/m)?.[0] ?? "";
-    expect([...declaration.matchAll(/kind: "(\w+)"/g)].map((m) => m[1])).toEqual(["int", "text", "bool", "unit", "data"]);
+    expect([...declaration.matchAll(/kind: "(\w+)"/g)].map((m) => m[1])).toEqual(["int", "text", "bool", "unit", "data", "array", "slice"]);
   });
 });

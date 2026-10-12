@@ -1,6 +1,6 @@
 import { callable } from "../ir/callables";
 import type { CallableId, Expr, Moment, NounId, Pattern } from "../ir/hir";
-import { bool, sameValue, type ConcreteValue } from "../semantics/values";
+import { bool, elementsOf, int, sameValue, type ConcreteValue } from "../semantics/values";
 import type { SymbolicTerm } from "../temporal/terms";
 
 // Evaluation of typed IR expressions. A value is concrete, or (for Int and Text only)
@@ -22,6 +22,14 @@ export interface EvalEnv {
 }
 
 export const concrete = (value: ConcreteValue): Value => ({ kind: "concrete", value });
+
+// An ordinary run-time error the program itself caused (an index out of range): the
+// run ends with FAULT. Distinct from the plain Errors below, which mean the type checker
+// let through something it should not have.
+export class RuntimeFault extends Error {}
+
+// Data values (variants, records, arrays) are concrete for now: building one from an
+// open temporal symbol needs that symbol's value now, so the run is UNRESOLVED.
 
 // Matches a value against a pattern, collecting bound locals; null when it does not
 // match. `bound` may start with the enclosing locals, which a pattern can shadow; a name
@@ -51,6 +59,22 @@ export function matchPattern(pattern: Pattern, value: ConcreteValue, bound: Map<
     }
   };
   return go(pattern, value) ? bound : null;
+}
+
+function sequence(value: ConcreteValue): readonly ConcreteValue[] {
+  const elements = elementsOf(value);
+  if (!elements) throw new Error("an array or slice was expected; the type checker should have caught this");
+  return elements;
+}
+
+// A checked position: an element index (below `length`), or a slice bound (up to `length`).
+function position(value: ConcreteValue, length: number, what: "element" | "bound"): number {
+  if (value.kind !== "int") throw new Error("an Int index was expected; the type checker should have caught this");
+  const limit = what === "element" ? length - 1 : length;
+  if (value.value < 0n || value.value > BigInt(limit)) {
+    throw new RuntimeFault(`${what === "element" ? "index" : "slice bound"} ${value.value} is out of range for ${length} element${length === 1 ? "" : "s"}`);
+  }
+  return Number(value.value);
 }
 
 export function evaluate(e: Expr, env: EvalEnv, locals: ReadonlyMap<string, ConcreteValue> = new Map()): Value {
@@ -95,6 +119,39 @@ export function evaluate(e: Expr, env: EvalEnv, locals: ReadonlyMap<string, Conc
       if (!field) throw new Error(`no field '${e.field}'; the type checker should have caught this`);
       return concrete(field);
     }
+    case "SetField": {
+      const record = needed(e.record, "a field");
+      if (record.kind !== "data" || record.fields[e.index] === undefined) throw new Error(`no field '${e.field}'; the type checker should have caught this`);
+      const fields = [...record.fields];
+      fields[e.index] = needed(e.value, "a data value");
+      return concrete({ ...record, fields });
+    }
+    case "ArrayLiteral":
+      return concrete({ kind: "array", elements: e.elements.map((x) => needed(x, "an array")) });
+    case "Index": {
+      const elements = sequence(needed(e.base, "an element"));
+      return concrete(elements[position(needed(e.index, "an index"), elements.length, "element")] as ConcreteValue);
+    }
+    case "SetIndex": {
+      const base = needed(e.base, "an element");
+      if (base.kind !== "array") throw new Error("only an array's element can be written; the type checker should have caught this");
+      const elements = [...base.elements];
+      elements[position(needed(e.index, "an index"), elements.length, "element")] = needed(e.value, "an array");
+      return concrete({ kind: "array", elements });
+    }
+    case "Slice": {
+      const base = needed(e.base, "a slice");
+      const length = sequence(base).length;
+      const from = position(needed(e.from, "a slice"), length, "bound");
+      const to = position(needed(e.to, "a slice"), length, "bound");
+      if (from > to) throw new RuntimeFault(`a slice cannot start at ${from} and end at ${to}`);
+      // A view of the same storage: a slice of a slice still views the array.
+      const storage = base.kind === "slice" ? base.storage : base.kind === "array" ? base.elements : [];
+      const offset = base.kind === "slice" ? base.start : 0;
+      return concrete({ kind: "slice", storage, start: offset + from, length: to - from });
+    }
+    case "Length":
+      return concrete(int(BigInt(sequence(needed(e.base, "a length")).length)));
     case "Match": {
       const scrutinee = needed(e.scrutinee, "a match");
       for (const arm of e.arms) {
