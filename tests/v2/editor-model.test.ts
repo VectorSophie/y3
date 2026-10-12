@@ -498,3 +498,54 @@ describe("adversarial cases", () => {
     expect([model.cellAt(now, 2, 0), model.cellAt(now, 3, 0)].some((c) => c === a || c === b)).toBe(false);
   });
 });
+
+import { compileWasm, loadWasmArtifact, memoryHost, runWasm } from "../../src/v2";
+import { observable } from "./compile-helpers";
+import { fixtures } from "./helpers";
+
+describe("engines agree, identities included", () => {
+  for (const { path, source } of fixtures()) {
+    it(path, () => {
+      const model = new ProgramModel({ nonce: "e" });
+      const doc = model.open({ text: source, path });
+      const build = model.build(doc);
+      if (!build.loaded || !build.artifact || !build.manifest) return;
+      const host = () => memoryHost({ now: 42n });
+      const vm = model.run(doc, { host: host() }).result;
+      const hir = model.run(doc, { host: host(), engine: "hir" }).result;
+      expect(observable(vm)).toEqual(observable(hir));
+      const wasm = loadWasmArtifact(compileWasm(build.loaded, build.artifact));
+      expect(observable(runWasm(wasm.module, wasm.loaded, build.manifest, { host: host() }))).toEqual(observable(hir));
+      // Every executed cell is a cell of the model.
+      for (const t of vm.trace) if (t.ids) expect(model.hasCell(t.ids.cell)).toBe(true);
+      expect(vm.trace.every((t) => t.ids !== undefined)).toBe(true);
+    });
+  }
+});
+
+import { moduleOf, writeArtifact, type BytecodeModule } from "../../src/v2";
+
+describe("reconciliation and artifacts, more adversarial cases", () => {
+  it("a named plane resized by a raw edit keeps its id, but a position never vouches for a different sentence", () => {
+    const { model, doc } = open("⟦ :층: ⟧\n\n※\n\n:층: ⟦\n[a는 1이다.] [b는 2이다.]\n[끝이다.] [ ]\n⟧\n");
+    const plane = model.getDocument(doc).floors[0] as PlaneId;
+    const [a, b] = [model.cellAt(plane, 0, 0), model.cellAt(plane, 1, 0)];
+    model.setText(doc, model.getDocument(doc).text.replace("[a는 1이다.] [b는 2이다.]", "[c는 3이다.] [b는 2이다.] [d는 4이다.]").replace("[끝이다.] [ ]", "[끝이다.] [ ] [ ]"));
+    expect(model.getDocument(doc).floors[0]).toBe(plane); // matched by name
+    expect(model.cellAt(plane, 1, 0)).toBe(b);
+    expect(model.cellAt(plane, 0, 0)).not.toBe(a);
+    expect(modelViolations(model)).toEqual([]);
+  });
+
+  it("Y3BC 3 refuses malformed identities in its debug map, and carries well-formed ones", () => {
+    const { model, doc } = open();
+    const text = model.build(doc).artifact as string;
+    const m = JSON.parse(text.split("\n")[1] as string) as BytecodeModule & { nodes: { ids?: unknown }[] };
+    expect(moduleOf(writeArtifact(m)).revision).toBe(model.revision);
+    const bad = (ids: unknown) => moduleOf(writeArtifact({ ...m, nodes: m.nodes.map((n, i) => (i === 0 ? { ...n, ids } : n)) } as never));
+    expect(() => bad({ document: "d", module: "m", plane: "p", cell: 7, node: null })).toThrow(/malformed identities/);
+    expect(() => bad({ document: "d", module: "m", plane: "p" })).toThrow(/malformed identities/);
+    expect(() => bad("c:1")).toThrow(/malformed identities/);
+    expect(() => moduleOf(writeArtifact({ ...m, revision: 3 } as never))).toThrow(/revision/);
+  });
+});
