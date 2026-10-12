@@ -22,7 +22,49 @@ export const TYPE_CODES = {
   NOT_EXHAUSTIVE: "Y3Y005",
   UNKNOWN: "Y3Y006",
   DUPLICATE_BINDING: "Y3Y007",
+  UNREACHABLE_ARM: "Y3Y008",
 } as const;
+
+// Pattern-matrix analysis (Maranget, "Warnings for pattern matching"). A constructor
+// is a variant, a record, 참/거짓 or (); Int and Text have infinitely many literals, so
+// only a catch-all covers them. Binds count as wildcards.
+type Ctor = { readonly key: string; readonly label: string; readonly fields: readonly Type[] };
+
+const WILD: Pattern = { kind: "wildcard" };
+const OPEN: Type = { kind: "var", id: -1 }; // a column whose type has no finite constructor set
+
+function headKey(p: Pattern | undefined): string | null {
+  if (!p) return null;
+  switch (p.kind) {
+    case "wildcard":
+    case "bind":
+      return null;
+    case "variant":
+      return p.variant;
+    case "record":
+      return p.type;
+    case "literal":
+      return p.value.kind === "bool" ? (p.value.value ? "참" : "거짓") : p.value.kind === "unit" ? "()" : `literal ${JSON.stringify(p.value, (_, v) => (typeof v === "bigint" ? `${v}n` : v))}`;
+  }
+}
+
+const headFields = (p: Pattern): readonly Pattern[] => (p.kind === "variant" || p.kind === "record" ? p.fields : []);
+
+// Rows that can still match once the first column is the constructor `key`.
+function specialize(rows: readonly Pattern[][], key: string, arity: number): Pattern[][] {
+  return rows.flatMap((row) => {
+    const [head, ...rest] = row;
+    if (headKey(head) === null) return [[...Array<Pattern>(arity).fill(WILD), ...rest]];
+    return headKey(head) === key && head ? [[...headFields(head), ...rest]] : [];
+  });
+}
+
+// Rows that match whatever the first column holds, without it.
+const defaultRows = (rows: readonly Pattern[][]): Pattern[][] => rows.filter((row) => headKey(row[0]) === null).map((row) => row.slice(1));
+
+const heads = (rows: readonly Pattern[][]): Set<string | null> => new Set(rows.map((row) => headKey(row[0])));
+
+const render = (ctor: Ctor, args: readonly string[]) => (ctor.fields.length === 0 ? ctor.label : `${ctor.label}(${args.join(", ")})`);
 
 type TemporalUse = { readonly noun: NounId; readonly at: Provenance; readonly what: string };
 
@@ -41,11 +83,11 @@ export class TypeChecker {
     readonly table: TypeTable = new TypeTable(),
   ) {}
 
-  private report(code: string, at: Provenance, message: string): void {
+  private report(code: string, at: Provenance, message: string, severity: "error" | "warning" = "error"): void {
     const key = `${at.span.start.line}:${at.span.start.column}:${code}:${message}`;
     if (this.reported.has(key)) return;
     this.reported.add(key);
-    this.diagnostics.push({ code, severity: "error", message: `[${at.source}] ${message}`, span: at.span });
+    this.diagnostics.push({ code, severity, message: `[${at.source}] ${message}`, span: at.span });
   }
 
   private name(id: NounId): string {
@@ -248,13 +290,17 @@ export class TypeChecker {
   private match(e: Extract<Expr, { node: "Match" }>): Type {
     const scrutinee = this.expr(e.scrutinee);
     const result = this.u.fresh();
+    let wellTyped = true;
     for (const arm of e.arms) {
       this.locals.push(new Map());
+      const before = this.diagnostics.length;
       this.pattern(arm.pattern, scrutinee, e.at);
+      wellTyped &&= this.diagnostics.length === before;
       this.expect(result, this.expr(arm.body), arm.body.at, "every arm of a match");
       this.locals.pop();
     }
-    this.exhaustive(e, this.u.resolve(scrutinee));
+    // Coverage is only meaningful for well-typed patterns.
+    if (wellTyped) this.coverage(e, scrutinee);
     return result;
   }
 
@@ -309,25 +355,77 @@ export class TypeChecker {
     }
   }
 
-  // A match must cover every value: a catch-all arm, every variant of a sum (each with
-  // irrefutable fields), or both truth values of a Bool.
-  private exhaustive(e: Extract<Expr, { node: "Match" }>, type: Type): void {
-    const irrefutable = (p: Pattern): boolean =>
-      p.kind === "wildcard" || p.kind === "bind" || (p.kind === "record" && p.fields.every(irrefutable));
-    if (e.arms.some((arm) => irrefutable(arm.pattern))) return;
-    let missing: string[];
-    const def = type.kind === "named" ? this.table.get(type.name) : null;
-    if (def?.kind === "sum") {
-      const covered = new Set(
-        e.arms.flatMap((arm) => (arm.pattern.kind === "variant" && arm.pattern.fields.every(irrefutable) ? [arm.pattern.variant] : [])),
-      );
-      missing = def.variants.filter((v) => !covered.has(v.name)).map((v) => v.name);
-    } else if (type.kind === "prim" && type.name === "Bool") {
-      const covered = new Set(e.arms.flatMap((arm) => (arm.pattern.kind === "literal" && arm.pattern.value.kind === "bool" ? [arm.pattern.value.value] : [])));
-      missing = [true, false].filter((v) => !covered.has(v)).map((v) => (v ? "참" : "거짓"));
-    } else {
-      missing = ["_"];
+  // The constructors of a type, or null when it has too many to list (Int, Text) or
+  // is not known here.
+  private ctorsOf(type: Type): Ctor[] | null {
+    const t = this.u.resolve(type);
+    if (t.kind === "prim") {
+      if (t.name === "Bool") return [{ key: "참", label: "참", fields: [] }, { key: "거짓", label: "거짓", fields: [] }];
+      return t.name === "Unit" ? [{ key: "()", label: "()", fields: [] }] : null;
     }
+    const def = t.kind === "named" ? this.table.get(t.name) : null;
+    if (!def || t.kind !== "named") return null;
+    const args = new Map(def.params.map((p, i) => [p, t.args[i] ?? OPEN]));
+    if (def.kind === "product") return [{ key: def.name, label: def.name, fields: def.fields.map((f) => substituteParams(f.type, args)) }];
+    return def.variants.map((v) => ({ key: v.name, label: v.name, fields: v.fields.map((f) => substituteParams(f, args)) }));
+  }
+
+  // Whether the pattern vector q matches some value that no row matches.
+  private useful(rows: readonly Pattern[][], q: readonly Pattern[], types: readonly Type[]): boolean {
+    const [p, ...qs] = q;
+    const [t, ...rest] = types;
+    if (!p || !t) return rows.length === 0;
+    const ctors = this.ctorsOf(t);
+    const key = headKey(p);
+    if (key !== null) {
+      const fields = headFields(p);
+      const fieldTypes = ctors?.find((c) => c.key === key)?.fields ?? fields.map(() => OPEN);
+      return this.useful(specialize(rows, key, fields.length), [...fields, ...qs], [...fieldTypes, ...rest]);
+    }
+    // Split on constructors only when the rows name all of them; otherwise the rows
+    // that match anything here decide (this keeps wide records of Bools linear).
+    if (ctors && ctors.every((c) => heads(rows).has(c.key))) {
+      return ctors.some((c) => this.useful(specialize(rows, c.key, c.fields.length), [...c.fields.map(() => WILD), ...qs], [...c.fields, ...rest]));
+    }
+    return this.useful(defaultRows(rows), qs, rest);
+  }
+
+  // Values (as pattern vectors) that no row matches; empty when the rows are exhaustive.
+  private uncovered(rows: readonly Pattern[][], types: readonly Type[], limit = 3): string[][] {
+    const [t, ...rest] = types;
+    if (!t) return rows.length === 0 ? [[]] : [];
+    const ctors = this.ctorsOf(t);
+    const named = heads(rows);
+    if (!ctors || !ctors.every((c) => named.has(c.key))) {
+      // Some constructor (or, for Int and Text, some literal) is never named, so only
+      // the rows that match anything here can cover it.
+      // A column that names no constructor at all is missing simply "_".
+      const listed = ctors && [...named].some((key) => key !== null);
+      const missing = listed ? ctors.filter((c) => !named.has(c.key)).map((c) => render(c, c.fields.map(() => "_"))) : ["_"];
+      const tails = this.uncovered(defaultRows(rows), rest, limit);
+      return missing.flatMap((m) => tails.map((w) => [m, ...w])).slice(0, limit);
+    }
+    const found: string[][] = [];
+    for (const c of ctors) {
+      for (const w of this.uncovered(specialize(rows, c.key, c.fields.length), [...c.fields, ...rest], limit - found.length)) {
+        found.push([render(c, w.slice(0, c.fields.length)), ...w.slice(c.fields.length)]);
+        if (found.length >= limit) return found;
+      }
+    }
+    return found;
+  }
+
+  // A match must cover every value of its scrutinee's type, and every arm must be
+  // reachable. Nested patterns count: Some(참), Some(거짓) and None cover Option<Bool>.
+  private coverage(e: Extract<Expr, { node: "Match" }>, scrutinee: Type): void {
+    const rows: Pattern[][] = [];
+    for (const arm of e.arms) {
+      if (!this.useful(rows, [arm.pattern], [scrutinee])) {
+        this.report(TYPE_CODES.UNREACHABLE_ARM, arm.body.at, "this arm can never match: the arms before it cover every value it matches", "warning");
+      }
+      rows.push([arm.pattern]);
+    }
+    const missing = this.uncovered(rows, [scrutinee]).map((w) => w[0] ?? "_");
     if (missing.length > 0) {
       this.report(TYPE_CODES.NOT_EXHAUSTIVE, e.at, `this match does not cover ${missing.join(", ")}`);
     }

@@ -112,9 +112,10 @@ nouns:
   값#1 : Int
 ```
 
-The runtime executes HIR only. Tests replace a cell's HIR and the program does what
-the IR says, whatever the cell's text reads. A layering test keeps `ir/`, `types/` and
-`runtime/` from importing the sentence parser.
+The runtime executes HIR only. It receives a `CompiledProgram` (`ir/program`): the
+space and each cell's typed HIR. Tests replace a cell's HIR and the program does what
+the IR says, whatever the cell's text reads. A layering test follows every import,
+transitively, to keep `ir/`, `types/` and `runtime/` from reaching the sentence parser.
 
 ## Semantic versions
 
@@ -127,7 +128,9 @@ Surface Y3 looks mutable. Internally, each store, `미정` or receive defines a 
 ```
 
 - A run reports every version with the step that defined it and the steps that read
-  it (`ProgramResult.versions`): a def-use chain.
+  it (`ProgramResult.versions`): a def-use chain. A constraint's read is a use too: a
+  past statement, a send, `처음의 N`, a promise or `처음은 끝이었다` falling due all
+  read the version they speak about.
 - A `처음` snapshot is a map from nouns to versions. Fixed points compare versions,
   not copies of the machine.
 - This is a semantic model, not yet bytecode. φ-like merges arrive with a static
@@ -157,9 +160,15 @@ name may be reused in different arms, and an inner match may shadow an outer bin
 The checker enforces this on any HIR, wherever it came from; the runtime matcher treats
 a duplicate as a broken invariant.
 
-The checker requires every match to be exhaustive. It must have a catch-all arm, or
-cover every variant of a sum, or cover both `참` and `거짓`. It also requires all arms
-to share one type.
+The checker requires every match to be exhaustive, looking through nested patterns
+(Maranget's pattern-matrix usefulness). `Some(참)`, `Some(거짓)` and `None` together cover
+`Option<Bool>`; `Ok(Some(n))` and `Err(_)` miss `Ok(None)`, and the error names it.
+A variant, a record, `참`/`거짓` and `()` are constructors. Int and Text have too many
+literals to list, so only a catch-all (`_` or a binding) covers them.
+
+An arm that can never match, because earlier arms cover everything it matches, is a
+warning (`Y3Y008`), not an error. All arms must share one type. Coverage is judged only
+when every pattern is well typed; an ill-typed pattern reports its own error.
 
 M5 has no source syntax for these. They are built and tested at the IR level, and M6
 gives them surface syntax without changing the IR or the checker.
@@ -202,6 +211,7 @@ gives them surface syntax without changing the IR or the checker.
 | `Y3Y005` | a match that is not exhaustive |
 | `Y3Y006` | unknown type, variant, field or local |
 | `Y3Y007` | a name bound twice in one pattern |
+| `Y3Y008` | an arm that can never match (warning) |
 | `Y3G012` | a malformed call |
 
 ## What changed for existing programs
