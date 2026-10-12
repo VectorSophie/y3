@@ -217,3 +217,51 @@ bytecode instruction → MIR op → CFG node → HIR statement (cell) → source
 
 A `FAULT` raised in the VM reports the same coordinate and frame as the interpreter, and
 the debug map names the sentence and plane.
+
+## 8. Audit (M8)
+
+1. **Why MIR exists.** It is where the two real compilation steps land: space unfolded
+   into CFG blocks, and expressions linearized with explicit concreteness (`now`) points.
+   It is also what the optimizer and the verifier's dataflow pass reason about.
+2. **Could HIR → bytecode have been enough?** Not without doing MIR's work inside the
+   encoder: the CFG exploration, the linearization and the register dataflow would
+   have to happen while writing bytes. MIR and bytecode share one instruction set on
+   purpose. If one of them ever stops paying for itself, it is bytecode's separate
+   encoding, not MIR.
+3. **The Spatial CFG's invariant.** A node is (body, full pose, open-anchor stack).
+   Its successors are exactly the poses the machine would reach from it, by
+   `runtime/movement`. Cells are never removed. A test follows every interpreter run
+   through the CFG, step by step.
+4. **Why the temporal graph is not part of the CFG.** Temporal relations carry values,
+   not control. A channel's "back-edge" never moves the pointer, and a promise never
+   changes which cell runs. Merging the two would either invent control flow or lose
+   the relation.
+5. **Semantics duplicated in the VM?** None. The VM follows edges and keeps registers.
+   Everything else goes through `runtime/core`, `semantics/numeric`, `runtime/evaluate`'s
+   `ops`/`matchPattern`/`callBuiltin`, and `temporal/store`.
+6. **Is numeric behaviour centralized?** Yes, in `semantics/numeric`. The optimizer folds
+   through the same `arith`, and refuses to fold anything that would fault.
+7. **Is temporal solving centralized?** Yes. `temporal/solver.ts` is the only solver,
+   behind `temporal/store`. The graph only records what the store was asked and
+   answered.
+8. **Is effect ordering centralized?** Yes. Output holding, the effect barrier and the
+   event log all live in `runtime/core`, and every effect, from either engine, passes
+   through `env.effect`.
+9. **Can an optimizer change causal classification?** It never rewrites `bigint`
+   arithmetic, temporal operations, loads or assignments. Differential tests compare
+   marks, the temporal graph and the trace with optimization on and off, and a planted
+   bug that optimizes `bigint` is caught.
+10. **Can malformed bytecode break runtime invariants?** The verifier refuses it before
+    it runs (§ verifier in `docs/v2-bytecode.md`). What remains is guarded inside the VM
+    as an internal error, never a fake program outcome.
+11. **Does source mapping survive every lowering stage?** Yes:
+    instruction → block → CFG node → debug map (body, pose, sentence, plane, span). A
+    test traces a bytecode `FAULT` back to its sentence, plane and source line.
+12. **Are bytecode artifacts reproducible?** Yes. They are byte-identical for the same
+    source and lock, as tested and checked by the CLI. A planted timestamp is caught.
+
+Known limits:
+- **CFG size.** The CFG is capped at 200,000 nodes, because poses × anchor stacks could
+  blow up in a pathological program. Real programs are small: every fixture and test
+  program is under a few hundred nodes.
+- **Collections** still copy on update (M7).
