@@ -6,7 +6,7 @@ import { numericType, order, type ArithOp } from "../semantics/numeric";
 import type { NumericName } from "../types/types";
 import type { SymbolicTerm } from "../temporal/terms";
 
-// Evaluation of typed IR expressions. A value is concrete, or (for Int and Text only)
+// Evaluation of typed IR expressions. A value is concrete, or (for bigint and Text only)
 // a symbolic term the temporal store will settle later. Everything that touches nouns,
 // time or effects is supplied by the environment; this module is the pure part, the
 // same for the interpreter and for tests.

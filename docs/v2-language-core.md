@@ -259,7 +259,7 @@ so formatting and the order of imports never change it.
 
 Records, variants and arrays are built from concrete values. Building one from an open
 temporal symbol needs that symbol's value now, so the run stops `UNRESOLVED`, exactly
-like a branch. Temporal values remain i64 or Text (`Y3Y004`). Symbolic data is not
+like a branch. Temporal values are `bigint` or `Text` (`Y3Y004`; see `docs/v2-runtime-model.md` §1.8). Symbolic data is not
 planned: the solver stays `A x = b` over integers, and text unification.
 
 ## Diagnostics added in M6

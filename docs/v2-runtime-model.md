@@ -231,16 +231,29 @@ interpreter never touches the outside world itself.
 | Effect | Commits | Arguments |
 |---|---|---|
 | stdout (`출력`, `줄출력`, `말한다`) | in program order, as soon as every earlier write is known | may be symbolic: the write is **held** until its value is determined, and holds every write after it |
-| stdin, files, clocks | when the cell runs | must be concrete now; a symbolic argument is `UNRESOLVED` at the boundary |
+| stdin, files, clocks (and any later effect: network, process, FFI) | when the cell runs, and only if no earlier output is held | must be concrete now; a symbolic argument is `UNRESOLVED` at the boundary |
 
 - **Output is held, not rewritten.** A held write has no text yet. It is written once,
   when its value becomes known, or as `?` if the run ends first. Output is never taken
-  back, and the stdout stream is never reordered. Holding stdout can delay it past a
-  later effect (a file write or an input prompt): that is the runtime's buffering rule,
-  not a change to what was written.
+  back, and the stdout stream is never reordered: a later write waits behind a held one.
+- **Held output is an effect barrier.** External effects reach the world in program
+  order, across all of them, not only within stdout. While an earlier write is held on
+  an open symbol, the run may continue through pure computation and through temporal
+  statements (which may resolve the symbol and flush the write). It may not commit
+  another external effect. If it reaches one first (a file write, a read from stdin or
+  a file, a clock reading), it stops there with `UNRESOLVED`, before the effect is
+  committed: the file is not written, the input is not consumed, the clock is not read.
+  The held write is never forced out as `?` early, because the value may still become
+  known and `?` would then be a false observation; `?` appears only when the run is
+  over. All effects pass through one runtime entry point, which holds the barrier, so a
+  new effect kind is covered by construction.
+- **The event log is the order the world saw.** `ProgramResult.events` records every
+  committed external effect at the moment it commits: each stdout write
+  (`std.io.stdout`, with its text) and each other effect (its callable id and what it
+  returned), with the step. Because of the barrier, this is both program order and
+  observation order, and it is what a replay will feed back.
 - **Input is grounded.** What stdin, a file or a clock returns is a concrete value. It
-  is recorded as an event (`ProgramResult.events`: step, source, value) for later
-  replay, and it can never become a temporal symbol. Clock readings are `i64`; input is
+  is in the event log for replay, and it can never become a temporal symbol. Clock readings are `i64`; input is
   `Text`. A past statement about an input value can only check it: a mismatch is a
   `PARADOX`, never a rewrite of what was read.
 - **The outside world is not retroactive.** No constraint, however late, changes a
@@ -271,8 +284,9 @@ interpreter never touches the outside world itself.
    failures, parse failures, absent keys and absent input are values. A test plants
    "file error becomes FAULT" and catches it.
 8. **External effects are separated from temporal constraints** (§6). Effects need
-   concrete arguments except held stdout. Input is recorded and grounded. Clock values
-   are `i64`.
+   concrete arguments except held stdout, and held stdout is a barrier no other effect
+   crosses, so the world observes effects in program order. Input is recorded and
+   grounded. Clock values are `i64`.
 9. **The standard library uses the user's call and type system.**
    - Same `Call` HIR node, name resolution, signature instantiation and checking.
    - One difference: built-ins may have *bounded* type parameters (`T: number`,

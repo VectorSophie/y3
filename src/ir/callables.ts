@@ -29,12 +29,13 @@ export type Signature = {
 // The resolved types of one call: what checked arithmetic and conversions need.
 export type CallTypes = { readonly args: readonly Type[]; readonly result: Type };
 
-// A grounded, nondeterministic input the program consumed, kept for replay.
+// One committed external effect: what crossed the boundary, in the order it crossed.
+// `source` is the callable's id (std.fs.write, std.io.readLine, …) or std.io.stdout for
+// a committed write; `value` what the effect returned (or, for stdout, the text).
 export type HostEvent = { readonly step: number; readonly source: string; readonly value: string };
 
 export type EffectContext = {
   readonly host: Host;
-  readonly record: (source: string, value: string) => void;
   readonly files: Map<number, { readonly path: string; open: boolean }>;
 };
 

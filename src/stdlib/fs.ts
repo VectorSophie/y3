@@ -46,7 +46,6 @@ export const FS = namespace("std.fs", "파일", {
       signature: { params: [TEXT], result: result(TEXT, FS_ERROR) },
       perform: ([path], ctx) => {
         const r = ctx.host.readFile(asText(path));
-        ctx.record("fs.read", r.ok ? `${r.value.length} bytes` : r.kind);
         return r.ok ? decode(r.value) : failure(r.kind, r.message);
       },
     },
@@ -62,7 +61,6 @@ export const FS = namespace("std.fs", "파일", {
       signature: { params: [TEXT], result: BOOL },
       perform: ([path], ctx) => {
         const found = ctx.host.stat(asText(path)).ok;
-        ctx.record("fs.exists", String(found));
         return bool(found);
       },
     },
@@ -74,7 +72,6 @@ export const FS = namespace("std.fs", "파일", {
       signature: { params: [TEXT], result: result(named("FileInfo"), FS_ERROR) },
       perform: ([path], ctx) => {
         const r = ctx.host.stat(asText(path));
-        ctx.record("fs.metadata", r.ok ? `${r.value.size} bytes` : r.kind);
         return wrap(r, (info) => ({ kind: "data", type: "FileInfo", variant: null, fields: [int(info.size), bool(info.directory)] }));
       },
     },
@@ -114,7 +111,6 @@ export const FS = namespace("std.fs", "파일", {
         const h = handle(ctx, file);
         if (!isHandle(h)) return h;
         const r = ctx.host.readFile(h.path);
-        ctx.record("fs.read", r.ok ? `${r.value.length} bytes` : r.kind);
         return r.ok ? decode(r.value) : failure(r.kind, r.message);
       },
     },

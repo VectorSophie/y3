@@ -36,7 +36,8 @@ In the types below:
   (`FAULT`).
 - `줄읽기` returns the next line without its line break; `낱말읽기` returns the next
   whitespace-separated token. Both read the same stream, and both give `None` at the
-  end of input. Every read is recorded as an event.
+  end of input. Every read is recorded as an event. Like every effect other than output,
+  a read never runs while earlier output is held (runtime model §6).
 
 ## std/text: 글
 

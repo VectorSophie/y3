@@ -49,7 +49,6 @@ export const IO = namespace("std.io", "표준", {
       signature: { params: [], result: option(TEXT) },
       perform: (_args, ctx) => {
         const line = ctx.host.readLine();
-        ctx.record("stdin.line", line === null ? "<end>" : JSON.stringify(line));
         return line === null ? none : some(text(line));
       },
     },
@@ -61,7 +60,6 @@ export const IO = namespace("std.io", "표준", {
       signature: { params: [], result: option(TEXT) },
       perform: (_args, ctx) => {
         const token = ctx.host.readToken();
-        ctx.record("stdin.token", token === null ? "<end>" : JSON.stringify(token));
         return token === null ? none : some(text(token));
       },
     },

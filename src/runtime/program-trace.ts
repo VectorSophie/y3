@@ -29,8 +29,8 @@ export function describeEffect(effect: Effect): string {
       return `out ${JSON.stringify(effect.line)}`;
     case "write":
       return `out ${JSON.stringify(effect.text)}  [no line break]`;
-    case "input":
-      return `input ${effect.source} = ${effect.value}`;
+    case "effect":
+      return `effect ${effect.source} → ${effect.value}`;
     case "test":
       return `test ${showValue(effect.left)} ${effect.negated ? "≠" : "="} ${showValue(effect.right)}: ${effect.holds ? "yes" : "no"}`;
     case "order":

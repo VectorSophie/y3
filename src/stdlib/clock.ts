@@ -13,7 +13,6 @@ export const CLOCK = namespace("std.clock", "시계", {
       signature: { params: [], result: I64 },
       perform: (_args, ctx) => {
         const ms = ctx.host.nowMillis();
-        ctx.record("clock.now", String(ms));
         return int(ms);
       },
     },
@@ -25,7 +24,6 @@ export const CLOCK = namespace("std.clock", "시계", {
       signature: { params: [], result: I64 },
       perform: (_args, ctx) => {
         const ns = ctx.host.monotonicNanos();
-        ctx.record("clock.monotonic", String(ns));
         return int(ns);
       },
     },

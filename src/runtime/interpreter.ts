@@ -89,7 +89,7 @@ export type Effect =
   | { readonly kind: "leave"; readonly anchor: Coordinate }
   | { readonly kind: "end" }
   | { readonly kind: "write"; readonly text: string } // output without a line break
-  | { readonly kind: "input"; readonly source: string; readonly value: string } // a grounded input from the host
+  | { readonly kind: "effect"; readonly source: string; readonly value: string } // an external effect, committed
   // calls
   | { readonly kind: "call"; readonly frame: string; readonly args: readonly string[] }
   | { readonly kind: "return"; readonly frame: string; readonly values: readonly string[] }
@@ -180,20 +180,15 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
   let committed = 0; // writes [0, committed) have reached the host
   const host = options.host ?? memoryHost();
   const events: HostEvent[] = [];
-  const effectContext: EffectContext = {
-    host,
-    record: (source, value) => {
-      events.push({ step: now, source, value });
-      effects.push({ kind: "input", source, value });
-    },
-    files: new Map(),
-  };
+  const effectContext: EffectContext = { host, files: new Map() };
   // Commits every write up to the first one whose value is not yet known.
   const commit = (all = false) => {
     while (committed < writes.length) {
       const w = writes[committed] as Write;
       if (w.text === null && !all) return;
-      host.write((w.text ?? "?") + (w.newline ? "\n" : ""));
+      const text = (w.text ?? "?") + (w.newline ? "\n" : "");
+      host.write(text);
+      events.push({ step: now, source: "std.io.stdout", value: JSON.stringify(text) });
       committed += 1;
     }
   };
@@ -441,8 +436,20 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
       commit();
     },
     effect: (target, args, types) => {
+      // An effect barrier: output held on an open symbol was written before this
+      // effect, so this effect may not reach the outside world first. Stop here,
+      // before anything is committed, rather than reorder what the world observes.
+      if (committed < writes.length) {
+        const open = [...new Set(writes.slice(committed).flatMap((w) => (w.text === null && w.term ? pendingLabels(w.term) : [])))];
+        effects.push({ kind: "unresolved", symbols: open });
+        halt("UNRESOLVED", `'${target.namespace} ${target.name}' cannot run while earlier output is held on ${open.join(", ")}: an effect never overtakes held output`);
+        throw new Stopped();
+      }
       try {
-        return target.perform(args, effectContext, types);
+        const result = target.perform(args, effectContext, types);
+        events.push({ step: now, source: target.id, value: showValue(result) });
+        effects.push({ kind: "effect", source: target.id, value: showValue(result) });
+        return result;
       } catch (error) {
         if (error instanceof RuntimeFault) throw error;
         // The host itself broke (not an ordinary error the program can handle).

@@ -445,7 +445,16 @@ describe("std/io", () => {
     const host = memoryHost({ stdin: "첫 줄\n  12 34\n" });
     const result = run(["a는 표준 줄읽기:", "b는 표준 낱말읽기:", "c는 표준 낱말읽기:", "d는 표준 낱말읽기:", "a를 말한다.", "b를 말한다.", "c를 말한다.", "d를 말한다.", "끝이다."], "", host);
     expect(result.output).toEqual([`Some("첫 줄")`, `Some("12")`, `Some("34")`, "None"]);
-    expect(result.events.map((e) => `${e.source} ${e.value}`)).toEqual(['stdin.line "첫 줄"', 'stdin.token "12"', 'stdin.token "34"', "stdin.token <end>"]);
+    expect(result.events.map((e) => `${e.source} ${e.value}`)).toEqual([
+      'std.io.readLine Some("첫 줄")',
+      'std.io.readToken Some("12")',
+      'std.io.readToken Some("34")',
+      "std.io.readToken None",
+      'std.io.stdout "Some(\\"첫 줄\\")\\n"',
+      'std.io.stdout "Some(\\"12\\")\\n"',
+      'std.io.stdout "Some(\\"34\\")\\n"',
+      'std.io.stdout "None\\n"',
+    ]);
   });
 
   it("input is grounded: a past statement can only check it, never rewrite it", () => {
@@ -491,7 +500,7 @@ describe("std/clock", () => {
   it("reads the wall clock and a monotonic clock as recorded, concrete i64 events", () => {
     const result = run(["t는 시계 지금:", "a는 시계 단조:", "b는 시계 단조:", "b가 a보다 크면 \"증가\"를 말한다.", "t를 말한다.", "끝이다."], "", memoryHost({ now: 1700000000000n }));
     expect(result.output).toEqual(["증가", "1700000000000"]);
-    expect(result.events.map((e) => e.source)).toEqual(["clock.now", "clock.monotonic", "clock.monotonic"]);
+    expect(result.events.map((e) => e.source)).toEqual(["std.clock.now", "std.clock.monotonic", "std.clock.monotonic", "std.io.stdout", "std.io.stdout"]);
     expect(types(["t는 시계 지금:", "끝이다."])).toEqual({ t: "i64" });
   });
 });
@@ -540,5 +549,88 @@ describe("text literal escapes", () => {
   it("are \\n, \\t, \\\\ and \\\" in Text, as in runes; any other is refused", () => {
     expect(run(['s는 "a\\nb\\t\\"c\\"\\\\"이다.', "s를 말한다.", "끝이다."]).host.stdout.join("")).toBe('a\nb\t"c"\\\n');
     expect(errors(['s는 "a\\qb"이다.', "끝이다."])).toEqual([`Y3G003 [s는 "a\\qb"이다.] '\\q' is not an escape: use \\n, \\t, \\\\ or \\"`]);
+  });
+});
+
+describe("held output is an effect barrier", () => {
+  // Output held on an open symbol was written first; no later external effect may reach
+  // the world before it. Pure work and constraints may continue.
+  const committed = (r: ProgramResult) => r.events.map((e) => `${e.step} ${e.source}`);
+
+  it("held stdout → pure computation → resolution → fs write: stdout, then the write", () => {
+    const host = memoryHost();
+    const r = run(["x는 미정이다.", "x를 말한다.", "y는 x이다.", "y에 1을 더한다.", "x는 7이었다.", 'w는 파일 쓰기: "a.txt", "후"', "끝이다."], "", host);
+    expect(r.outcome.status).toBe("HALT");
+    expect(host.stdout).toEqual(["7\n"]);
+    expect(host.files.has("a.txt")).toBe(true);
+    expect(committed(r)).toEqual(["5 std.io.stdout", "6 std.fs.write"]);
+  });
+
+  it("held stdout → fs write before resolution: UNRESOLVED, and the write is not committed", () => {
+    const host = memoryHost();
+    const r = run(["x는 미정이다.", "x를 말한다.", 'w는 파일 쓰기: "a.txt", "먼저"', "x는 7이었다.", "끝이다."], "", host);
+    expect(r.outcome).toMatchObject({ status: "UNRESOLVED", steps: 3 });
+    expect("message" in r.outcome && r.outcome.message).toBe("'파일 쓰기' cannot run while earlier output is held on α1: an effect never overtakes held output");
+    expect(host.files.has("a.txt")).toBe(false);
+    expect(r.events.filter((e) => e.source !== "std.io.stdout")).toEqual([]);
+    expect(r.output).toEqual(["?"]); // the run ended with the value still open
+  });
+
+  it("held stdout → stdin read before resolution: UNRESOLVED, and nothing is consumed", () => {
+    const host = memoryHost({ stdin: "남은 줄\n" });
+    const r = run(["x는 미정이다.", "x를 말한다.", "l은 표준 줄읽기:", "끝이다."], "", host);
+    expect(r.outcome.status).toBe("UNRESOLVED");
+    expect(host.readLine()).toBe("남은 줄");
+    expect(r.events.map((e) => e.source)).toEqual(["std.io.stdout"]); // only the final "?"
+  });
+
+  it("held stdout → clock read before resolution: UNRESOLVED, and the clock is not read", () => {
+    const host = memoryHost();
+    let reads = 0;
+    const counting = { ...host, nowMillis: () => ((reads += 1), 0n) };
+    const r = run(["x는 미정이다.", "x를 말한다.", "t는 시계 지금:", "끝이다."], "", counting as MemoryHost);
+    expect(r.outcome.status).toBe("UNRESOLVED");
+    expect(reads).toBe(0);
+  });
+
+  it("applies to every effect callable, including ones added later", async () => {
+    const { CALLABLES } = await import("../../src/v2");
+    // Every effect goes through the runtime's one effect entry point, which holds the barrier.
+    expect(CALLABLES.filter((c) => c.kind === "effect").map((c) => c.id).sort()).toEqual(
+      ["std.clock.monotonic", "std.clock.now", "std.fs.append", "std.fs.close", "std.fs.create", "std.fs.exists", "std.fs.metadata", "std.fs.open", "std.fs.read", "std.fs.readHandle", "std.fs.write", "std.io.readLine", "std.io.readToken"].sort(),
+    );
+    for (const call of ['파일 존재: "a"', "표준 낱말읽기:", "시계 단조:"]) {
+      expect(run(["x는 미정이다.", "x를 말한다.", `r은 ${call}`, "끝이다."]).outcome.status, call).toBe("UNRESOLVED");
+    }
+  });
+
+  it("concrete stdout → fs, stdin, clock: ordinary program order", () => {
+    const host = memoryHost({ stdin: "줄\n", now: 5n });
+    const r = run(['"먼저"를 말한다.', 'w는 파일 쓰기: "a.txt", "x"', "l은 표준 줄읽기:", "t는 시계 지금:", '"나중"을 말한다.', "끝이다."], "", host);
+    expect(r.outcome.status).toBe("HALT");
+    expect(committed(r)).toEqual(["1 std.io.stdout", "2 std.fs.write", "3 std.io.readLine", "4 std.clock.now", "5 std.io.stdout"]);
+  });
+
+  it("a later concrete write to stdout waits behind the held one: one stream, never reordered", () => {
+    const host = memoryHost();
+    const r = run(["x는 미정이다.", "x를 말한다.", '"뒤"를 말한다.', "x는 1이었다.", "끝이다."], "", host);
+    expect(host.stdout).toEqual(["1\n", "뒤\n"]);
+    expect(committed(r)).toEqual(["4 std.io.stdout", "4 std.io.stdout"]);
+  });
+});
+
+describe("the temporal boundary is documented consistently", () => {
+  // Any line about temporal values that names Int/i64 as their numeric sort is stale (M7: bigint).
+  it("no document says a temporal value is Int or i64", async () => {
+    const { readdirSync } = await import("node:fs");
+    const { readRepoFile } = await import("./helpers");
+    const files = ["README.md", ...readdirSync("docs").filter((f) => f.endsWith(".md")).map((f) => `docs/${f}`)];
+    const stale = /\btemporal\b[^.\n]*`?\b(?:Int|i64)\b`? (?:or|and) `?Text\b/iu;
+    for (const file of files) {
+      for (const [i, line] of readRepoFile(file).split("\n").entries()) expect(stale.test(line), `${file}:${i + 1}: ${line}`).toBe(false);
+    }
+    expect(readRepoFile("docs/v2-runtime-model.md")).toContain("**A temporal value is `bigint` or `Text`.**");
+    expect(readRepoFile("docs/v2-language-core.md")).toContain("Temporal values are `bigint` or `Text`");
+    expect(errors(["x는 미정이다.", "x는 1.5였다.", "끝이다."])[0]).toContain("must be bigint or Text");
   });
 });

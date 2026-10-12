@@ -33,7 +33,7 @@ import {
 // Temporal unknowns are not its business. `값은 미정이다` gives 값 a type variable here
 // and a value symbol α in the temporal store at run time; arithmetic solves the first
 // (T = Int) before the program starts, testimony solves the second (α = 4) while it
-// runs. The only meeting point is a rule: a temporal value must be Int or Text,
+// runs. The only meeting point is a rule: a temporal value must be bigint or Text,
 // the two sorts the temporal solver understands.
 
 export const TYPE_CODES = {
@@ -61,7 +61,7 @@ export type BodyContext = {
 const MAIN_CONTEXT: BodyContext = { planes: new Map(), results: null };
 
 // Pattern-matrix analysis (Maranget, "Warnings for pattern matching"). A constructor
-// is a variant, a record, 참/거짓 or (); Int and Text have infinitely many literals, so
+// is a variant, a record, 참/거짓 or (); numbers and Text have infinitely many literals, so
 // only a catch-all covers them. Binds count as wildcards.
 type Ctor = { readonly key: string; readonly label: string; readonly fields: readonly Type[] };
 
@@ -575,7 +575,7 @@ export class TypeChecker {
     const ctors = this.ctorsOf(t);
     const named = heads(rows);
     if (!ctors || !ctors.every((c) => named.has(c.key))) {
-      // Some constructor (or, for Int and Text, some literal) is never named, so only
+      // Some constructor (or, for numbers and Text, some literal) is never named, so only
       // the rows that match anything here can cover it.
       // A column that names no constructor at all is missing simply "_".
       const listed = ctors && [...named].some((key) => key !== null);
