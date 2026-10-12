@@ -51,3 +51,4 @@ export * from "./compiler/bytecode";
 export * from "./temporal/graph";
 export * from "./compiler/optimize";
 export * from "./tools/doc";
+export * from "./format/canonical";
