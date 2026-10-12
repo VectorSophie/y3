@@ -30,11 +30,12 @@ export function runHir(c: { program: CompiledProgram; manifest: Manifest }, maxS
 
 export const column = (cells: string[], appendix = "") => `⟦\n${cells.map((c) => `[${c}]`).join("\n")}\n⟧\n${appendix ? `\n※\n\n${appendix}` : ""}`;
 
-import { compileToMir, executableOf, memoryHost as host2, runExecutable } from "../../src/v2";
+import { compileToMir, executableOf, memoryHost as host2, optimizeMir, runExecutable } from "../../src/v2";
 
-export function runVm(c: { program: CompiledProgram; manifest: Manifest }, maxSteps?: number, stdin?: string): ProgramResult {
-  const { mir, nodes } = compileToMir(c.program, c.manifest.start);
-  return runExecutable(executableOf(mir, nodes, c.manifest.start), c.program, c.manifest, { maxSteps, host: host2({ stdin, now: 42n }) });
+export function runVm(c: { program: CompiledProgram; manifest: Manifest }, maxSteps?: number, stdin?: string, optimize = false): ProgramResult {
+  const compiled = compileToMir(c.program, c.manifest.start);
+  const mir = optimize ? optimizeMir(compiled.mir).mir : compiled.mir;
+  return runExecutable(executableOf(mir, compiled.nodes, c.manifest.start), c.program, c.manifest, { maxSteps, host: host2({ stdin, now: 42n }) });
 }
 
 // Everything observable about a run, as plain data: two engines are equivalent only if
