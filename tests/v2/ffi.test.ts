@@ -322,3 +322,27 @@ describe("FFI: hostile bytecode", () => {
     expect(tamper((m) => (m.foreign.find((d: any) => d.name === "더하기").params[0] = { kind: "scalar", type: "i128" }))).toThrow(/malformed FFI parameter/);
   });
 });
+
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { libraryLoader } from "../../src/cli/node-host";
+
+describe("FFI: the CLI loads libraries only from inside the project", () => {
+  it("refuses traversal, absolute paths and symbolic links that leave the directory", () => {
+    const outside = mkdtempSync(join(tmpdir(), "y3-outside-"));
+    const project = mkdtempSync(join(tmpdir(), "y3-project-"));
+    writeFileSync(join(outside, "evil.wasm"), MATH);
+    mkdirSync(join(project, "libs"));
+    writeFileSync(join(project, "libs", "math.wasm"), MATH);
+    symlinkSync(join(outside, "evil.wasm"), join(project, "libs", "link.wasm"));
+    symlinkSync(join(project, "libs", "math.wasm"), join(project, "inside.wasm"));
+    const load = libraryLoader(project);
+    expect(load("libs/math.wasm")).toEqual(MATH);
+    expect(load("inside.wasm")).toEqual(MATH); // a link that stays inside is fine
+    expect(load("libs/link.wasm")).toBeNull();
+    expect(load(`../${outside.split("/").pop()}/evil.wasm`)).toBeNull();
+    expect(load(join(outside, "evil.wasm"))).toBeNull();
+    expect(load("libs")).toBeNull();
+  });
+});

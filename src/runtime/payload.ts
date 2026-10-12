@@ -1,4 +1,5 @@
 import type { ConcreteValue } from "../semantics/values";
+import { integerRange, isInteger, substituteParams, TypeTable, type Type } from "../types/types";
 
 // Values as JSON, for the replay log: everything an effect can return, resource handles
 // included (a replayed run reissues the same handle numbers in the same order).
@@ -58,4 +59,45 @@ export function decodePayload(p: Payload): ConcreteValue {
   if (Array.isArray(o.set)) return { kind: "set", entries: new Map(o.set.map((e) => { const [k, value] = e as [string, Payload]; return [k, decodePayload(value)]; })) };
   if ((o.resource === "file" || o.resource === "foreign") && typeof o.id === "number") return { kind: "resource", resource: o.resource, id: o.id };
   throw new PayloadError(`a malformed value: ${JSON.stringify(p)}`);
+}
+
+// Whether a value has a type: what a replayed result must satisfy before the program sees
+// it. A replay log is input, so a value from it is checked like any other input: a clock
+// reading must be an i64 in range, never Text, whatever the log claims.
+const BUILTINS = new TypeTable();
+export function conformsTo(v: ConcreteValue, t: Type): boolean {
+  switch (t.kind) {
+    case "prim":
+      if (isInteger(t.name)) {
+        if (v.kind !== "int") return false;
+        const range = integerRange(t.name);
+        return range === null || (v.value >= range.min && v.value <= range.max);
+      }
+      if (t.name === "f32" || t.name === "f64") return v.kind === "float" && v.width === (t.name === "f32" ? 32 : 64) && (t.name === "f64" || Number.isNaN(v.value) || Math.fround(v.value) === v.value);
+      if (t.name === "Rune") return v.kind === "rune" && Number.isInteger(v.value) && v.value >= 0 && v.value <= 0x10ffff && !(v.value >= 0xd800 && v.value <= 0xdfff);
+      if (t.name === "Text") return v.kind === "text";
+      if (t.name === "Bool") return v.kind === "bool";
+      if (t.name === "Unit") return v.kind === "unit";
+      return false;
+    case "array":
+      return v.kind === "array" && v.elements.length === t.length && v.elements.every((e) => conformsTo(e, t.element));
+    case "slice":
+      return v.kind === "array" && v.elements.every((e) => conformsTo(e, t.element));
+    case "named": {
+      const def = BUILTINS.get(t.name);
+      if (!def) return false;
+      const args = new Map(def.params.map((p, i) => [p, t.args[i] as Type]));
+      if (def.kind === "opaque") {
+        if (t.name === "File") return v.kind === "resource" && v.resource === "file";
+        if (t.name === "Foreign") return v.kind === "resource" && v.resource === "foreign";
+        if (t.name === "List") return v.kind === "list" && v.elements.every((e) => conformsTo(e, t.args[0] as Type));
+        return false; // no effect returns a map or a set
+      }
+      if (v.kind !== "data" || v.type !== t.name) return false;
+      const fields = def.kind === "product" ? (v.variant === null ? def.fields.map((f) => f.type) : null) : (def.variants.find((x) => x.name === v.variant)?.fields ?? null);
+      return fields !== null && fields.length === v.fields.length && fields.every((f, i) => conformsTo(v.fields[i] as ConcreteValue, substituteParams(f, args)));
+    }
+    default:
+      return true; // an open type variable: the checker left it unconstrained
+  }
 }

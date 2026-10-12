@@ -1,8 +1,9 @@
-import { ForeignRuntime, foreignLabel } from "./ffi";
+import { ForeignRuntime, foreignLabel, y3Signature } from "./ffi";
 import type { Coordinate, Pose } from "../space/manifest";
 import type { EffectContext, HostEvent } from "../ir/callables";
 import { memoryHost, type Capability, type Host } from "../stdlib/host";
-import { decodePayload, encodePayload } from "./payload";
+import { conformsTo, decodePayload, encodePayload, PayloadError } from "./payload";
+import { formatType, type Type } from "../types/types";
 import type { Moment, NounId } from "../ir/hir";
 import type { Body, CompiledProgram, Procedure } from "../ir/program";
 import { renderValue, sameValue, showValue, UNIT, type ConcreteValue } from "../semantics/values";
@@ -261,6 +262,7 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
     readonly kind: HostEvent["kind"];
     readonly args: readonly ConcreteValue[];
     readonly redact: boolean;
+    readonly result: Type; // what the program expects back: a replayed result must be one
     readonly denied?: () => ConcreteValue;
     readonly perform: () => ConcreteValue;
   };
@@ -279,7 +281,15 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
         throw new ReplayDivergence(`replay diverged at step ${now}: the program calls ${e.source}(${args.join(", ")}), but the recording has ${expected ? `${expected.source}(${expected.args.join(", ")})` : "nothing more"}`);
       }
       replay.next += 1;
-      result = decodePayload(expected.payload);
+      // The log is input: its value must be well formed and of the declared type.
+      let recorded: ConcreteValue | null = null;
+      try {
+        recorded = decodePayload(expected.payload);
+      } catch (error) {
+        if (!(error instanceof PayloadError)) throw error;
+      }
+      if (!recorded || !conformsTo(recorded, e.result)) throw new ReplayDivergence(`replay diverged at step ${now}: the recording's result for ${e.source} is not a ${formatType(e.result)}`);
+      result = recorded;
     } else if (host.capabilities?.[e.capability] === false) {
       if (!e.denied) throw new RuntimeFault(`${e.label} needs the '${e.capability}' capability, which the host denies`);
       result = e.denied();
@@ -542,6 +552,7 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
         kind: CHANGES_THE_WORLD.has(target.id) ? "effect" : "input",
         args,
         redact: target.redact === true,
+        result: types.result,
         denied: target.denied,
         perform: () => target.perform(args, effectContext, types),
       }),
@@ -554,7 +565,7 @@ export function createRuntime(program: CompiledProgram, options: RunOptions = {}
         if (host.capabilities?.ffi === false) throw new RuntimeFault(`${foreignLabel(id)} needs the 'ffi' capability, which the host denies`);
         return perform();
       }
-      return external({ source: `foreign.${id}`, label: foreignLabel(id), capability: "ffi", kind: "foreign", args, redact: false, perform });
+      return external({ source: `foreign.${id}`, label: foreignLabel(id), capability: "ffi", kind: "foreign", args, redact: false, result: y3Signature(decl).result, perform });
     },
     now: (value, purpose) => needNow([value], purpose)[0] as ConcreteValue,
   };

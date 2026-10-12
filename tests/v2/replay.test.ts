@@ -87,6 +87,17 @@ describe("record and replay", () => {
     expect(() => engines.vm(memoryHost(), readReplay(short, artifact).events)).toThrow(ReplayDivergence);
   });
 
+  it("a forged log (integrity recomputed) cannot hand the program a value outside its type", () => {
+    const { artifact, engines } = build(["t는 시계 지금:", "t를 말한다.", 'r은 파일 읽기: "a"', "끝이다."]);
+    const events = engines.vm(memoryHost({ files: { a: "x" } })).events;
+    const forge = (index: number, payload: unknown) => readReplay(writeReplay(artifact, events.map((e, i) => (i === index ? { ...e, payload: payload as never } : e))), artifact).events;
+    expect(() => engines.vm(memoryHost(), forge(0, { text: "지금" }))).toThrow(/result for std.clock.now is not a i64/);
+    expect(() => engines.vm(memoryHost(), forge(0, { int: "9".repeat(30) }))).toThrow(/is not a i64/);
+    expect(() => engines.vm(memoryHost(), forge(0, { nonsense: 1 }))).toThrow(ReplayDivergence);
+    expect(() => engines.hir(memoryHost(), forge(2, { data: "Result", variant: "Ok", fields: [{ int: "1" }] }))).toThrow(/std.fs.read is not a Result<Text, FsError>/);
+    expect(() => engines.hir(memoryHost(), forge(2, { data: "Result", variant: "Ok", fields: [{ text: "y" }] }))).not.toThrow();
+  });
+
   it("an effect called with different arguments diverges", () => {
     const one = build(['r은 파일 읽기: "a.txt"', "끝이다."]);
     const two = build(['r은 파일 읽기: "b.txt"', "끝이다."]);
