@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   compileProgram,
@@ -148,15 +148,30 @@ describe("layering", () => {
     expect(readdirSync(dir)).toContain("interpreter.ts");
   });
 
-  it("keeps the IR, the type checker and the runtime free of the Korean parser (M5)", () => {
+  it("keeps the IR, the type checker and the runtime free of the Korean parser, even transitively (M5)", () => {
     const root = join(__dirname, "..", "..", "src");
+    // Every module a file reaches through relative imports, type-only ones included.
+    const reach = (start: string): Map<string, string> => {
+      const seen = new Map<string, string>([[start, start]]); // file -> a file that imports it
+      const queue = [start];
+      while (queue.length > 0) {
+        const file = queue.pop() as string;
+        const source = readFileSync(file, "utf8");
+        for (const m of source.matchAll(/from "(\.[^"]+)"/g)) {
+          const target = `${join(dirname(file), m[1] ?? "")}.ts`;
+          if (!seen.has(target)) {
+            seen.set(target, file);
+            queue.push(target);
+          }
+        }
+      }
+      return seen;
+    };
     for (const dir of ["ir", "types", "runtime"]) {
       for (const file of readdirSync(join(root, dir))) {
-        const source = readFileSync(join(root, dir, file), "utf8");
-        const imports = [...source.matchAll(/from "([^"]+)"/g)].map((m) => m[1] ?? "");
-        for (const path of imports) {
+        for (const [reached, via] of reach(join(root, dir, file))) {
           // Spans and diagnostics are shared; sentences, particles and tense are not.
-          expect(/language\/(sentence|korean|document-parser)/.test(path), `${dir}/${file} imports ${path}`).toBe(false);
+          expect(/language\/(sentence|korean|document-parser)/.test(reached), `${dir}/${file} reaches ${reached} via ${via}`).toBe(false);
         }
       }
     }

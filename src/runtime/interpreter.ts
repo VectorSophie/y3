@@ -1,7 +1,7 @@
 import type { Coordinate, Manifest, Pose } from "../space/manifest";
 import { PRINTLN } from "../ir/callables";
 import type { CallableId, Expr, Moment, NounId, Stmt } from "../ir/hir";
-import { coordinateKey, type CompiledProgram } from "../semantics/program";
+import { coordinateKey, type CompiledProgram } from "../ir/program";
 import { renderValue, sameValue, UNIT, type ConcreteValue } from "../semantics/values";
 import { TemporalStore, type Resolution, type SymbolInfo } from "../temporal/store";
 import { carriesCause, literal, symbolsOf, TermError, type SymbolicTerm } from "../temporal/terms";
@@ -172,12 +172,14 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     if (!found) throw new RuntimeFault(`'${nameOf(noun)}' has no value or symbol yet`);
     return found;
   };
-  const recorded = (noun: NounId): Binding => version(noun).binding;
-  const bound = (noun: NounId): Binding => {
-    const v = version(noun);
+  // Every read of a version is a use, whether the present computes with it or a
+  // constraint (past, promise, send, 처음, 끝, fixed point) speaks about it.
+  const use = (v: Version): Version => {
     if (v.uses[v.uses.length - 1] !== now) v.uses.push(now);
-    return settle(v.binding);
+    return v;
   };
+  const recorded = (noun: NounId): Binding => use(version(noun)).binding;
+  const bound = (noun: NounId): Binding => settle(recorded(noun));
 
   // A new version of the noun.
   const define = (noun: NounId, binding: Binding) => {
@@ -194,7 +196,7 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     if (!s.anchor) throw new RuntimeFault(`'처음의 ${nameOf(noun)}' needs an open '여기가 처음이다'`);
     const v = s.start.get(noun);
     if (!v) throw new RuntimeFault(`'${nameOf(noun)}' had no value at 처음 ${at(s.anchor.position)}`);
-    return v.binding;
+    return use(v).binding;
   };
 
   // 끝의 N: a value from the end of the iteration, carried back as a fresh symbol that
@@ -272,13 +274,13 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
       if (stop) return;
       const v = current.get(promise.noun);
       if (!v) throw new RuntimeFault(`'${nameOf(promise.noun)}' was promised a value but has none when the promise falls due`);
-      constrain(termOf(v.binding), promise.term, `promised at t${promise.madeAt}`, promise.sentence);
+      constrain(termOf(use(v).binding), promise.term, `promised at t${promise.madeAt}`, promise.sentence);
     }
     for (const read of ending.endReads.splice(0)) {
       if (stop) return;
       const v = current.get(read.noun);
       if (!v) throw new RuntimeFault(`'끝의 ${nameOf(read.noun)}' was read, but '${nameOf(read.noun)}' has no value at the end`);
-      noteLoop(read.symbol, termOf(v.binding), `끝의 ${nameOf(read.noun)}`);
+      noteLoop(read.symbol, termOf(use(v).binding), `끝의 ${nameOf(read.noun)}`);
       constrain(read.symbol, termOf(v.binding), `끝의 ${nameOf(read.noun)} from t${read.madeAt}`, read.sentence);
     }
     for (const fixed of ending.fixed.splice(0)) {
@@ -288,6 +290,8 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
         const before = ending.start.get(noun);
         const after = current.get(noun);
         if (!before || !after || before === after) continue; // introduced during the iteration, or untouched
+        use(before);
+        use(after);
         noteLoop(termOf(before.binding), termOf(after.binding), `fixed point at t${fixed.madeAt}`);
         constrain(termOf(before.binding), termOf(after.binding), `처음은 끝이었다 at t${fixed.madeAt}`, fixed.sentence);
       }

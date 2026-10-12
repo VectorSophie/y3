@@ -1,8 +1,8 @@
 import type { DocumentAst, InlinePlaneAst, Span } from "../language/ast";
 import type { Diagnostic } from "../language/diagnostics";
 import { parseSentence, SENTENCE_CODES } from "../language/sentence-parser";
-import type { Noun, Provenance, Stmt } from "../ir/hir";
-import type { Coordinate } from "../space/manifest";
+import type { Provenance, Stmt } from "../ir/hir";
+import { coordinateKey, type CompiledProgram } from "../ir/program";
 import type { Space } from "../space/volume";
 import { checkProgram } from "../types/check";
 import { elaborate, ElaborationError, nounsIn, NounTable } from "./elaborate";
@@ -13,16 +13,6 @@ import { elaborate, ElaborationError, nounsIn, NounTable } from "./elaborate";
 // only the HIR.
 //
 //   sentence AST → elaborate (names, calls) → HIR → check (types) → typed HIR
-
-export type CompiledProgram = {
-  readonly space: Space;
-  readonly cells: ReadonlyMap<string, Stmt>; // key: "x,y,z"
-  readonly nouns: readonly Noun[]; // with their inferred types
-};
-
-export function coordinateKey(at: Coordinate): string {
-  return `${at.x},${at.y},${at.z}`;
-}
 
 // Where each layer's cells were written. A named plane used on two floors has one set
 // of source cells, so its diagnostics are reported once.

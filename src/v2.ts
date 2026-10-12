@@ -29,6 +29,7 @@ export * from "./semantics/values";
 export { elaborate, NounTable, PENDING, ELABORATION_CODES } from "./semantics/elaborate";
 export * from "./semantics/program";
 export * from "./ir/hir";
+export * from "./ir/program";
 export * from "./ir/callables";
 export * from "./ir/print";
 export * from "./types/types";

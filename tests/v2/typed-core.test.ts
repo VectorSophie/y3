@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bool,
+  BOOL,
   checkProgram,
   compileProgram,
   concrete,
@@ -190,6 +191,19 @@ describe("semantic versions", () => {
       [1, "4"],
     ]);
   });
+
+  it("count a constraint's read as a use: past tense, sends, 처음, promises, fixed points", () => {
+    const uses = (result: ProgramResult) => result.versions.map((v) => `${v.noun}${v.index}@${v.definedAt}:${v.uses.join(",")}`);
+    // [값은 4였다.] at t3 speaks about 값₁.
+    expect(uses(run("값은 미정이다.", "값에 1을 더한다.", "값은 4였다.", "끝이다."))).toEqual(["값0@1:2", "값1@2:3"]);
+    // Sending at t3 reads 수₁; the channel's own version 수₀ is read by the addition.
+    expect(uses(run("수가 다음에서 온다.", "수에 수를 더한다.", "수를 전으로 보낸다.", "끝이다."))).toEqual(["수0@1:2", "수1@2:3"]);
+    // 처음의 수 at t4 reads the version current at the anchor; the promise falls due at t4 (끝이다).
+    expect(uses(run("수는 5이다.", "여기가 처음이다.", "수에 1을 더한다.", "처음의 수는 5였다.", "끝이다."))).toEqual(["수0@1:3,4", "수1@3:"]);
+    expect(uses(run("값은 미정이다.", "값은 4일 것이다.", "끝이다."))).toEqual(["값0@1:3"]);
+    // The fixed point, due when the run ends at t5, reads both ends of the iteration.
+    expect(uses(run("수는 미정이다.", "여기가 처음이다.", "수에 수를 더한다.", "처음은 끝이었다.", "끝이다."))).toEqual(["수0@1:3,5", "수1@3:5"]);
+  });
 });
 
 describe("provenance", () => {
@@ -314,6 +328,69 @@ describe("algebraic data types", () => {
     ]);
     expect(typecheck(match(lit(int(1n)), [{ kind: "literal", value: int(1n) }, lit(int(1n))])).errors).toEqual(["Y3Y005 this match does not cover _"]);
     expect(typecheck(match(lit(int(1n)), [{ kind: "wildcard" }, lit(int(1n))])).errors).toEqual([]);
+  });
+
+  describe("coverage of nested patterns", () => {
+    const yes: Pattern = { kind: "literal", value: bool(true) };
+    const no: Pattern = { kind: "literal", value: bool(false) };
+    const ok = (p: Pattern): Pattern => ({ kind: "variant", type: "Result", variant: "Ok", fields: [p] });
+    const err = (p: Pattern): Pattern => ({ kind: "variant", type: "Result", variant: "Err", fields: [p] });
+    const optBool = make("Option", "Some", lit(bool(true)));
+    const diagnostics = (e: Expr) => {
+      const checker = new TypeChecker(new Map<number, Noun>());
+      checker.expr(e);
+      checker.finish();
+      return checker.diagnostics.map((d) => `${d.severity} ${d.code} ${d.message.replace("[test] ", "")}`);
+    };
+
+    it("accepts Some(참), Some(거짓), None as covering Option<Bool>", () => {
+      expect(typecheck(match(optBool, [some(yes), lit(int(1n))], [some(no), lit(int(2n))], [none, lit(int(0n))])).errors).toEqual([]);
+    });
+
+    it("names a value the arms miss, however deep", () => {
+      expect(typecheck(match(optBool, [some(yes), lit(int(1n))], [none, lit(int(0n))])).errors).toEqual(["Y3Y005 this match does not cover Some(거짓)"]);
+      const nested = make("Result", "Ok", make("Option", "Some", lit(int(5n))));
+      expect(typecheck(match(nested, [ok(some(bind("n"))), local("n")], [err({ kind: "wildcard" }), lit(int(0n))])).errors).toEqual([
+        "Y3Y005 this match does not cover Ok(None)",
+      ]);
+      expect(typecheck(match(optBool, [some(bind("b")), lit(int(1n))])).errors).toEqual(["Y3Y005 this match does not cover None"]);
+      expect(typecheck(match(make("Option", "None"))).errors).toEqual(["Y3Y005 this match does not cover _"]);
+    });
+
+    it("needs a catch-all under Int and Text, whatever the literals", () => {
+      const someInt = make("Option", "Some", lit(int(1n)));
+      const one: Pattern = { kind: "literal", value: int(1n) };
+      expect(typecheck(match(someInt, [some(one), lit(int(1n))], [none, lit(int(0n))])).errors).toEqual(["Y3Y005 this match does not cover Some(_)"]);
+      expect(typecheck(match(someInt, [some(one), lit(int(1n))], [some(bind("n")), local("n")], [none, lit(int(0n))])).errors).toEqual([]);
+    });
+
+    it("warns about an arm that can never match, without refusing the program", () => {
+      const shadowed = match(optBool, [{ kind: "wildcard" }, lit(int(0n))], [some(yes), lit(int(1n))]);
+      expect(diagnostics(shadowed)).toEqual(["warning Y3Y008 this arm can never match: the arms before it cover every value it matches"]);
+      const covered = match(optBool, [some(yes), lit(int(1n))], [some(no), lit(int(2n))], [none, lit(int(0n))], [some(bind("b")), lit(int(3n))]);
+      expect(diagnostics(covered)).toEqual(["warning Y3Y008 this arm can never match: the arms before it cover every value it matches"]);
+      const repeated = match(lit(int(1n)), [{ kind: "literal", value: int(1n) }, lit(int(0n))], [{ kind: "literal", value: int(1n) }, lit(int(1n))], [{ kind: "wildcard" }, lit(int(2n))]);
+      expect(diagnostics(repeated)).toEqual(["warning Y3Y008 this arm can never match: the arms before it cover every value it matches"]);
+    });
+
+    it("stays fast on wide records: 24 Bool fields are not 2^24 cases", () => {
+      const table = new TypeTable();
+      const names = Array.from({ length: 24 }, (_, i) => `f${i}`);
+      table.define({ kind: "product", name: "넓다", params: [], fields: names.map((name) => ({ name, type: BOOL })) });
+      const wide = make("넓다", null, ...names.map(() => lit(bool(true))));
+      const all: Pattern = { kind: "record", type: "넓다", fields: names.map(() => ({ kind: "wildcard" }) as Pattern) };
+      const firstTrue: Pattern = { kind: "record", type: "넓다", fields: names.map((_, i) => (i === 0 ? yes : { kind: "wildcard" }) as Pattern) };
+      const started = performance.now();
+      expect(typecheck(match(wide, [firstTrue, lit(int(1n))], [all, lit(int(0n))]), table).errors).toEqual([]);
+      expect(typecheck(match(wide, [firstTrue, lit(int(1n))]), table).errors).toEqual([`Y3Y005 this match does not cover 넓다(거짓, ${names.slice(1).map(() => "_").join(", ")})`]);
+      expect(performance.now() - started).toBeLessThan(1000);
+    });
+
+    it("leaves coverage alone when a pattern is ill-typed", () => {
+      expect(typecheck(match(optBool, [ok({ kind: "wildcard" }), lit(int(1n))])).errors).toEqual([
+        "Y3Y001 a pattern must be Option<Bool>, not Result<?T3, ?T4>",
+      ]);
+    });
   });
 
   it("requires every arm to have the same type", () => {
