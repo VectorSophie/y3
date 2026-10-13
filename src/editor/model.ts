@@ -156,6 +156,20 @@ export class ProgramModel {
   private readonly reserved = new Set<string>();
   private builds = new Map<string, Build>(); // `${revision} ${document}`
   private maps = new Map<string, SourceMap>();
+  // Per-revision indexes: a snapshot never changes, so neither do these.
+  private cellIndex: { revision: ProgramRevision; cells: Map<CellId, { d: DocState; plane: PlaneId; x: number; y: number; entry: CellEntry }> } | null = null;
+  private stmtCache = new Map<string, ReadonlyMap<CellId, Stmt>>();
+
+  private locate(id: CellId) {
+    if (this.cellIndex?.revision !== this.revision) {
+      const cells = new Map<CellId, { d: DocState; plane: PlaneId; x: number; y: number; entry: CellEntry }>();
+      for (const d of this.snapshot.docs.values()) {
+        for (const p of d.structure.planes.values()) p.grid.forEach((row, y) => row.forEach((entry, x) => entry && cells.set(entry.id, { d, plane: p.id, x, y, entry })));
+      }
+      this.cellIndex = { revision: this.revision, cells };
+    }
+    return this.cellIndex.cells.get(id) ?? null;
+  }
 
   constructor(private readonly options: ModelOptions = {}) {
     this.nonce = options.nonce ?? Math.random().toString(36).slice(2, 8);
@@ -528,9 +542,9 @@ export class ProgramModel {
   }
 
   getCell(id: CellId): CellView {
-    for (const d of this.snapshot.docs.values()) {
-      const found = findCell(d.structure, id);
-      if (!found) continue;
+    const found = this.locate(id);
+    if (found) {
+      const d = found.d;
       return freeze({
         id,
         document: d.id,
@@ -549,7 +563,7 @@ export class ProgramModel {
   }
 
   hasCell(id: CellId): boolean {
-    return [...this.snapshot.docs.values()].some((d) => findCell(d.structure, id) !== null);
+    return this.locate(id) !== null;
   }
 
   cellIds(id: CellId): CellIds {
@@ -619,8 +633,12 @@ export class ProgramModel {
 
   // Every statement of a document's current build, by cell.
   statements(document: DocumentId): ReadonlyMap<CellId, Stmt> {
+    const key = `${this.revision} ${document}`;
+    const cached = this.stmtCache.get(key);
+    if (cached) return cached;
     const program = this.build(document).program;
     const out = new Map<CellId, Stmt>();
+    this.stmtCache = new Map([...[...this.stmtCache].slice(-16), [key, out]]);
     if (!program) return out;
     for (const body of [program, ...program.procedures.values()]) {
       for (const stmt of body.cells.values()) if (stmt.at.ids && stmt.at.ids.document === document) out.set(stmt.at.ids.cell, stmt);
@@ -683,6 +701,7 @@ export function hirNodes(stmt: Stmt, cell: CellId, id: NodeId): HirNode[] {
 // Positions → elements, and elements → spans, for one document at one revision.
 class SourceMap {
   private readonly elements: Element[] = [];
+  private byLine: Map<number, Element[]> | null = null;
   private readonly cells = new Map<CellId, Span>();
   private readonly planes = new Map<PlaneId, Span>();
 
@@ -732,8 +751,12 @@ class SourceMap {
   // The innermost element containing a position: a cell before its plane.
   at(line: number, column: number): Element | null {
     const rank = (e: Element) => (e.kind === "cell" || e.kind === "declaration" || e.kind === "comment" || e.kind === "reference" ? 0 : 1);
+    if (!this.byLine) {
+      this.byLine = new Map();
+      for (const e of this.elements) for (let l = e.span.start.line; l <= e.span.end.line; l += 1) this.byLine.set(l, [...(this.byLine.get(l) ?? []), e]);
+    }
     let best: Element | null = null;
-    for (const e of this.elements) if (contains(e.span, line, column) && (!best || rank(e) < rank(best))) best = e;
+    for (const e of this.byLine.get(line) ?? []) if (contains(e.span, line, column) && (!best || rank(e) < rank(best))) best = e;
     return best;
   }
   cellSpan(id: CellId): Span | undefined {
@@ -758,7 +781,8 @@ function readSidecar(text: string): SidecarData {
     throw new ModelError("the identity sidecar is not valid JSON");
   }
   if (raw.magic !== "Y3MODEL" || raw.version !== 1 || typeof raw.document !== "string" || typeof raw.module !== "string" || !Array.isArray(raw.structure?.planes?.map)) throw new ModelError("a malformed identity sidecar");
-  const structure = { ...raw.structure, planes: new Map((raw.structure.planes.map as { id: PlaneId }[]).map((p) => [p.id, p])) } as unknown as Structure;
+  const structure = { ...raw.structure, planes: new Map((raw.structure.planes.map as { id: PlaneId }[]).map((p) => [p?.id, p])) } as unknown as Structure;
+  if (!wellFormed(structure)) throw new ModelError("a malformed identity sidecar");
   return { magic: "Y3MODEL", version: 1, document: raw.document as DocumentId, module: raw.module as ModuleId, path: typeof raw.path === "string" ? raw.path : null, structure };
 }
 
@@ -770,4 +794,26 @@ function sidecarIds(s: SidecarData): string[] {
   }
   for (const d of s.structure.declarations) ids.push(d.node);
   return ids;
+}
+
+// A sidecar is input: its structure is checked for shape before any id is trusted.
+function wellFormed(s: Structure): boolean {
+  const str = (x: unknown) => typeof x === "string" && x.length > 0;
+  const comments = (x: unknown) => Array.isArray(x) && x.every((c) => typeof c?.text === "string");
+  const entry = (e: unknown) => {
+    const c = e as CellEntry | null;
+    return c !== null && typeof c === "object" && str(c.id) && (c.node === null || str(c.node)) && (c.text === null || typeof c.text === "string") && (c.text === null) === (c.node === null);
+  };
+  return (
+    (s.frontMatter === null || typeof s.frontMatter === "string") &&
+    Array.isArray(s.volume) &&
+    s.volume.every((v) => comments(v?.comments) && ("plane" in v ? str(v.plane) && s.planes.has(v.plane) : str((v as { missing?: unknown }).missing))) &&
+    [...s.planes.values()].every((p) => str(p?.id) && (p.name === null || str(p.name)) && (p.signature === null || typeof p.signature === "string") && comments(p.comments) && Array.isArray(p.grid) && p.grid.every((r) => Array.isArray(r) && r.every(entry))) &&
+    Array.isArray(s.definitions) &&
+    s.definitions.every((d) => s.planes.has(d)) &&
+    Array.isArray(s.declarations) &&
+    s.declarations.every((d) => str(d?.node) && typeof d.name === "string" && typeof d.text === "string" && comments(d.comments)) &&
+    (s.appendix === null || comments(s.appendix?.comments)) &&
+    comments(s.trailing)
+  );
 }

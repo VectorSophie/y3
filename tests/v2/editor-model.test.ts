@@ -421,6 +421,9 @@ describe("raw text, formatting and persistence", () => {
     expect(created.some((c) => model.getPlane(model.getDocument(doc).floors[0] as PlaneId).cells.flat().includes(c as CellId))).toBe(false);
     expect(modelViolations(next)).toEqual([]);
     expect(() => next.open({ text, sidecar: "Y3MODEL 2\n{}" })).toThrow(/version 1/);
+    // Found in M10: a sidecar is input. A malformed one is refused cleanly, never half-used.
+    const broken = 'Y3MODEL 1\n{"magic":"Y3MODEL","version":1,"document":"d","module":"m","structure":{"planes":{"map":[{"id":"p","grid":"x"}]}}}';
+    expect(() => new ProgramModel().open({ text, sidecar: broken })).toThrow(/malformed identity sidecar/);
   });
 });
 
@@ -542,7 +545,7 @@ describe("reconciliation and artifacts, more adversarial cases", () => {
     const text = model.build(doc).artifact as string;
     const m = JSON.parse(text.split("\n")[1] as string) as BytecodeModule & { nodes: { ids?: unknown }[] };
     expect(moduleOf(writeArtifact(m)).revision).toBe(model.revision);
-    const bad = (ids: unknown) => moduleOf(writeArtifact({ ...m, nodes: m.nodes.map((n, i) => (i === 0 ? { ...n, ids } : n)) } as never));
+    const bad = (ids: unknown) => moduleOf(writeArtifact({ ...m, nodes: m.nodes.map((n, i) => (i === 0 ? { ...(n as object), ids } : n)) } as never));
     expect(() => bad({ document: "d", module: "m", plane: "p", cell: 7, node: null })).toThrow(/malformed identities/);
     expect(() => bad({ document: "d", module: "m", plane: "p" })).toThrow(/malformed identities/);
     expect(() => bad("c:1")).toThrow(/malformed identities/);

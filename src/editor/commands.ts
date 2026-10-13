@@ -36,6 +36,7 @@ type MutablePlane = { id: PlaneId; name: string | null; signature: string | null
 // One document's structure, being edited.
 export class Draft {
   readonly planes = new Map<PlaneId, MutablePlane>();
+  private readonly owner = new Map<CellId, PlaneId>(); // where each cell was last put: a hint, checked on use
   volume: SlotEntry[];
   definitions: PlaneId[];
   declarations: DeclEntry[];
@@ -45,7 +46,10 @@ export class Draft {
     private readonly base: Structure,
     private readonly newId: NewId,
   ) {
-    for (const p of base.planes.values()) this.planes.set(p.id, { ...p, grid: p.grid.map((r) => [...r]) });
+    for (const p of base.planes.values()) {
+      this.planes.set(p.id, { ...p, grid: p.grid.map((r) => [...r]) });
+      for (const row of p.grid) for (const e of row) if (e) this.owner.set(e.id, p.id);
+    }
     this.volume = [...base.volume];
     this.definitions = [...base.definitions];
     this.declarations = [...base.declarations];
@@ -58,7 +62,8 @@ export class Draft {
     return p;
   }
   find(cell: CellId): { plane: MutablePlane; x: number; y: number; entry: CellEntry } | null {
-    for (const plane of this.planes.values()) {
+    const hint = this.planes.get(this.owner.get(cell) as PlaneId);
+    for (const plane of hint ? [hint, ...this.planes.values()] : this.planes.values()) {
       for (let y = 0; y < plane.grid.length; y += 1) {
         const row = plane.grid[y] as (CellEntry | null)[];
         for (let x = 0; x < row.length; x += 1) if (row[x]?.id === cell) return { plane, x, y, entry: row[x] as CellEntry };
@@ -80,6 +85,7 @@ export class Draft {
     const width = Math.max(x + 1, ...plane.grid.map((r) => r.length));
     for (const row of plane.grid) while (row.length < width) row.push(null);
     (plane.grid[y] as (CellEntry | null)[])[x] = entry;
+    if (entry) this.owner.set(entry.id, plane.id);
   }
   private occupied(plane: MutablePlane, x: number, y: number): CellEntry | null {
     return plane.grid[y]?.[x] ?? null;
@@ -143,6 +149,8 @@ export class Draft {
         const b = this.cell(c.b);
         (a.plane.grid[a.y] as (CellEntry | null)[])[a.x] = b.entry;
         (b.plane.grid[b.y] as (CellEntry | null)[])[b.x] = a.entry;
+        this.owner.set(b.entry.id, a.plane.id);
+        this.owner.set(a.entry.id, b.plane.id);
         return [];
       }
       case "CopyCell": {
