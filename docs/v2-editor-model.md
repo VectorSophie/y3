@@ -227,7 +227,7 @@ sentences; global recompilation on demand):
 | swap two cells | 10 ms | 23 ms |
 | undo / redo | < 0.1 ms | < 0.1 ms |
 | `getCell` for every cell | 12 ms | 17 ms |
-| rename a noun with ~2 700 references (one transaction, checked) | 36 ms | 207 ms |
+| rename a noun read by a third of the cells (one transaction, checked) | 36 ms | 207 ms |
 | `modelViolations` | 7 ms | 36 ms |
 
 The first measurement found three quadratic paths (a linear `getCell`, a linear draft
