@@ -178,3 +178,176 @@ a reference to it.
 
 ## Not in M10
 No UI, renderer, LSP transport, async workers, collaboration or incremental parser.
+
+## The API
+
+Everything lives in `src/editor` (exported from the package as `editor`). An IDE imports
+nothing else.
+
+| Module | Holds |
+|---|---|
+| `ir/identity.ts` | the branded id types (`DocumentId`, `ModuleId`, `PlaneId`, `CellId`, `NodeId`, `ProgramRevision`) and `CellIds`; neutral: no imports, so the compiler can carry ids without knowing the editor |
+| `editor/structure.ts` | a document's structure with ids, aligned one to one with the layout AST; `fromAst`, `toAst`, `attach` (ids onto a fresh parse), `reconcile` (raw text) |
+| `editor/commands.ts` | the structural commands and the transaction draft that validates them |
+| `editor/model.ts` | `ProgramModel`: lifecycle, transactions, history, builds, runs, source maps, queries |
+| `editor/events.ts` | structured runtime events (`docs/v2-source-mapping.md`) |
+| `editor/services.ts` | definition, references, rename, hover, completion, semantic tokens (`docs/v2-lsp-services.md`) |
+| `editor/invariants.ts` | `modelViolations`: every invariant below, through the public queries |
+
+Queries: `documents`, `getDocument`, `getModule`, `getPlane`, `getCell`, `cellAt(plane, x, y)`,
+`spaceCellAt(document, x, y, z)`, `sourceSpanOf`, `elementAt`, `cellAtSourcePosition`,
+`cellAtSourceOffset`, `hirNodesForCell`, `hirNode`, `statements`, `mirInstructionsForCell`,
+`instruction`, `instructions`, `traceEvents`, `traceEventsForCell`, `diagnostics`, `build`,
+`run`, `isCurrent`, `sidecar`. They return frozen plain data; no internal map escapes.
+Definitions and references are services (`EditorServices.definitionOf(NodeId)`,
+`referencesOf(NodeId)`, and by position or symbol).
+
+### Invariants (checked after every edit, undo and redo in the tests)
+- no two documents, modules, planes, cells or statements share an id;
+- every cell is in exactly one plane, at the position the plane says, and `cellAt` agrees;
+- every authored cell has a CellId; VOID (outside a plane's rectangle) has none; a cell is
+  blank exactly when it has no statement NodeId;
+- an inline plane is on exactly one floor; a callable plane on none; planes are non-empty
+  rectangles;
+- the source map sends each cell's span back to that cell;
+- every HIR statement's provenance names an existing cell and that cell's current
+  statement NodeId; so does every MIR instruction.
+
+## Results
+
+**Performance** (Node 24, synthetic programs of N floors of N×N cells, one third of them
+sentences; global recompilation on demand):
+
+| | 1 000 cells | 8 000 cells |
+|---|---|---|
+| open | 4 ms | 13 ms |
+| first build (HIR, MIR, Y3BC 3) | 27 ms | 98 ms |
+| edit one sentence (transaction, format, re-parse, attach) | 12 ms | 33 ms |
+| rebuild after it | 13 ms | 56 ms |
+| swap two cells | 10 ms | 23 ms |
+| undo / redo | < 0.1 ms | < 0.1 ms |
+| `getCell` for every cell | 12 ms | 17 ms |
+| rename a noun with ~2 700 references (one transaction, checked) | 36 ms | 207 ms |
+| `modelViolations` | 7 ms | 36 ms |
+
+The first measurement found three quadratic paths (a linear `getCell`, a linear draft
+lookup per command, a linear source-map search); each is now indexed per revision or per
+draft, and an edit is linear in the document, as a whole-document recompile must be.
+
+**Planted bugs.** Each was planted in a copy of the code, the editor suites run, and the
+file restored. All 17 were caught (two only after their tests were sharpened):
+
+| # | Bug | Caught by |
+|---|---|---|
+| 1 | MoveCell creates a new CellId | "MoveCell keeps the CellId…" |
+| 2 | RenamePlane creates a new PlaneId | "ExtractNamedPlane keeps the PlaneId…", plane rename service |
+| 3 | delete + undo regenerates CellIds | properties: "delete + undo restores ids exactly" |
+| 4 | redo regenerates identities | "undo restores the exact prior model; redo the exact later one", fuzzing |
+| 5 | blank cells treated as VOID | properties, fuzzing (invariants) |
+| 6 | a source span mapped to the neighbouring cell | invariants (source map round trip) |
+| 7 | HIR loses its CellId provenance | definition/references services |
+| 8 | MIR maps to the wrong NodeId | invariants (MIR provenance) |
+| 9 | a stale trace is mapped as current | "a trace from an older revision is stale" |
+| 10 | rename ignores pattern shadowing | "renames a noun in its body only…" |
+| 11 | inlined copies reuse the named plane's CellIds | "inlining a named plane makes copies" |
+| 12 | the formatter becomes the identity source | rename and edit tests (statement ids) |
+| 13 | a raw edit keeps a position's id in a resized plane | "a named plane resized by a raw edit…" (added after the first run missed it) |
+| 14 | a failed transaction commits its earlier commands | "a transaction applies completely or not at all" |
+| 15 | a new edit after undo keeps the redo branch | "a new edit after undo discards the redo branch", fuzzing |
+| 16 | sidecar ids are not reserved (collisions) | "an identity sidecar brings ids back…" |
+| 17 | Y3BC 3 accepts malformed identities | "Y3BC 3 refuses malformed identities" (added after the first run missed it) |
+
+**Real bugs found.**
+- A malformed identity sidecar crashed `open` with a `TypeError` deep in reconciliation;
+  a sidecar is input, so it is now checked for shape and refused cleanly.
+- The quadratic queries above.
+- During development the services' call-head rename failed on `[합은 두배: 값]`: the
+  parser keeps two readings of a call head, and renaming one of them in the expected
+  sentence AST left the other stale. Both readings now follow the renamed word.
+
+## Architecture audit
+
+**1. What exactly is stable identity in Y3?** The model's ids for authored things:
+documents, modules, planes, cells, statements and declarations (`ir/identity.ts`), kept
+by `ProgramModel` across edits, undo/redo and (with a sidecar) sessions.
+
+**2. Why are coordinates not identity?** Cells move (`MoveCell`, `SwapCells`, rows and
+columns inserted before them); a named plane's cell is at several z positions at once;
+coordinates are what an edit changes. Tests: "after a move, the source map follows the
+cell, not the coordinates", "move and swap preserve CellIds".
+
+**3. Where are IDs created?** Only in `ProgramModel` (`newId`): `fromAst` on open, `reconcile`
+for unmatched elements, and the commands that create cells, planes and statements
+(`Draft.fresh`, `InsertPlane`, `InlineNamedPlane`, `EditSentence` with new text).
+
+**4. Where are IDs preserved?** In the structure through every command (`commands.ts`),
+through serialization (`attach` copies ids onto the fresh parse; it never invents them),
+through raw edits where `reconcile` is certain, through undo/redo (snapshots), and through
+the compiler (provenance, debug map, Y3BC 3, trace entries).
+
+**5. When are IDs intentionally regenerated?** New elements; copies (`CopyCell`,
+`InlineNamedPlane`); a changed sentence's statement NodeId; anything reconciliation cannot
+match with confidence.
+
+**6. How does raw text editing reconcile IDs?** `reconcile` (structure.ts): planes by name,
+identical content, then size-and-majority; cells by position-and-text, unique text, then
+position in an unresized plane; declarations by text. Tests in "raw text…" and
+"adversarial cases".
+
+**7. What is the difference between DocumentId and ProgramRevision?** A DocumentId names a
+logical document for its whole life; a ProgramRevision names one state of the whole model,
+fresh on every change.
+
+**8. How does a trace know which revision it belongs to?** `model.run` returns a `RunRecord`
+with the build's revision; an artifact carries it in Y3BC 3 (`Loaded.revision`); every
+structured event carries it. `traceEvents` reports `stale` when it is not current.
+
+**9. Can old diagnostics attach to a new model?** Each `ModelDiagnostic` carries its
+revision; `isCurrent(result)` is the contract an asynchronous analysis checks before
+applying anything. Builds are cached per revision, so the current diagnostics are always
+those of the current revision.
+
+**10. Does undo restore exact identities?** Yes: it restores the snapshot object itself.
+Tests: "undo restores the exact prior model", "delete, then undo, restores the very same
+CellId", fuzzing compares full identity snapshots after every undo.
+
+**11. Does redo restore exact identities?** Yes, the same way; the same tests.
+
+**12. Can one CellId exist in two locations?** No. Placements of a named plane are one
+authored cell; copies get new ids; the invariant "no two cells share an id" is checked
+after every fuzzed operation.
+
+**13. Can VOID have a CellId?** No. `cellAt` returns null outside a plane; a draft's VOID
+holes are refused at commit; `MakeVoid` and `DeleteCell` end the id.
+
+**14. Does the compiler depend on editor classes?** No. It carries `CellIds` from the
+neutral `ir/identity.ts`; a test forbids any import of `src/editor` from the compiler,
+runtime, language, semantics, types, space, temporal, stdlib, format, ir, tools and
+container layers.
+
+**15. Does the UI need to parse trace strings?** No: `runEvents` turns structured trace
+entries, effects and host events into typed events with ids; human traces are rendered
+from the same data.
+
+**16. Can semantic rename accidentally rename shadowed or unrelated symbols?** References
+come from HIR noun ids per body; pattern-bound locals are excluded; every rewritten
+sentence must parse to exactly the expected sentence AST; the program must have no new
+errors afterwards or the rename is undone. Tests: strings, pattern bindings, another
+body's same-named noun, conflicts, capture.
+
+**17. What does the future 3D IDE still need?** Expression-level MIR mapping (instructions
+are mapped to statements, not to sub-expressions); token-level offsets inside sentences
+from the parser (services find words by scanning the cell's text); an incremental
+compiler; a sentence printer, so structural edits inside a sentence (not just renames)
+can be made on the AST; an LSP transport; cross-document undo grouping per editor tab;
+and a persistent sidecar policy for git workflows (merges).
+
+## Open questions
+1. Should the parser report token spans inside a sentence, so services stop scanning
+   words?
+2. Should MIR instructions carry the HIR path of the expression they came from (a Y3BC
+   change)?
+3. Should history be per document rather than per model?
+4. Should sidecars be written next to sources by default, and how should they merge?
+5. `EditSentence` refuses brackets even inside string literals, to keep cell boundaries
+   unambiguous for every parser; is that too conservative?

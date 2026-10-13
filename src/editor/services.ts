@@ -443,10 +443,10 @@ export class EditorServices {
     const lines = doc.text.split("\n");
     let lineStart = 0;
     lines.forEach((text, i) => {
+      // A comment is what the parser says is one: a '#' inside a cell is part of its sentence.
       const hash = commentStart(text);
-      if (hash >= 0) push(lineStart + hash, lineStart + text.length, "comment");
+      if (hash >= 0 && this.model.elementAt(document, i + 1, hash + 1)?.kind === "comment") push(lineStart + hash, lineStart + text.length, "comment");
       lineStart += text.length + 1;
-      void i;
     });
     for (const plane of doc.planes) {
       for (const row of this.model.getPlane(plane).cells) {

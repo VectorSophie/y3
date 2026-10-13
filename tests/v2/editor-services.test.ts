@@ -168,7 +168,7 @@ describe("hover, completion and semantic tokens", () => {
   });
 
   it("semantic tokens classify words by resolution, with no colors", () => {
-    const { services, doc, model, at } = setup();
+    const { services, doc, model, at } = setup(`# 주석\n${SOURCE.replace('["값을 말한다"를 말한다.]', '["값 # 아님"을 말한다.]')}`);
     const tokens = services.semanticTokens(doc);
     const textOf = (t: { line: number; column: number; length: number }) => (model.getDocument(doc).text.split("\n")[t.line - 1] as string).slice(t.column - 1, t.column - 1 + t.length);
     const kinds = new Map(tokens.map((t) => [`${textOf(t)}@${t.line}`, t.type]));
@@ -176,8 +176,10 @@ describe("hover, completion and semantic tokens", () => {
     expect(kinds.get(`값은@${line(at(0, 0))}`)).toBe("noun");
     expect(kinds.get(`두배@${line(at(0, 1))}`)).toBe("plane");
     expect(kinds.get(`Some@${line(at(0, 2))}`)).toBe("variant");
-    expect(kinds.get(`"값을 말한다"@${line(at(0, 4))}`)).toBe("literal");
+    expect(kinds.get(`"값 # 아님"@${line(at(0, 4))}`)).toBe("literal");
     expect(kinds.get(`말한다@${line(at(0, 5))}`)).toBe("keyword");
+    // One comment line; a '#' inside a string is part of the literal.
+    expect(tokens.filter((t) => t.type === "comment").map(textOf)).toEqual(["# 주석"]);
     expect(tokens.every((t) => ["keyword", "type", "module", "plane", "callable", "noun", "field", "variant", "literal", "comment", "temporal"].includes(t.type))).toBe(true);
   });
 });

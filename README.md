@@ -173,11 +173,18 @@ y3 check · fmt · build · run [--engine vm|hir] · trace · test · doc · loc
 functions over sandboxed wasm32 libraries, declared with `외부` (`docs/v2-ffi.md`); a
 WebAssembly backend that compiles bytecode and imports the runtime core
 (`docs/v2-wasm.md`); host capabilities, structured effect events and deterministic replay
-(`docs/v2-replay.md`). Bytecode is now `Y3BC 2`.
+(`docs/v2-replay.md`). It made bytecode `Y3BC 2`.
 
 ```
 y3 build program.y3 --target wasm · y3 run program.wasm · y3 run program.y3 --record run.y3r · --replay run.y3r
 ```
+
+**M10** adds the editor model (`docs/v2-editor-model.md`): stable ids for documents,
+modules, planes, cells and statements; structural edits as transactions; exact undo and
+redo; raw-text reconciliation; links from source to cells, typed HIR, MIR and runtime
+events (`docs/v2-source-mapping.md`); and semantic services: definition, references,
+rename, hover, completion and semantic tokens (`docs/v2-lsp-services.md`). Bytecode is now
+`Y3BC 3`.
 
 
 ```

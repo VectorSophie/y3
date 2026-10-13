@@ -552,3 +552,20 @@ describe("reconciliation and artifacts, more adversarial cases", () => {
     expect(() => moduleOf(writeArtifact({ ...m, revision: 3 } as never))).toThrow(/revision/);
   });
 });
+
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+
+describe("layering", () => {
+  it("the compiler, runtime, language and tools never import the editor model; ids come from a neutral module", () => {
+    const root = join(__dirname, "..", "..", "src");
+    const files = (dir: string): string[] => readdirSync(dir).flatMap((e) => (statSync(join(dir, e)).isDirectory() ? files(join(dir, e)) : e.endsWith(".ts") ? [join(dir, e)] : []));
+    for (const layer of ["compiler", "runtime", "semantics", "types", "language", "space", "temporal", "stdlib", "format", "ir", "tools", "container"]) {
+      for (const file of files(join(root, layer))) {
+        const imports = [...readFileSync(file, "utf8").matchAll(/from "([^"]+)"/g)].map((m) => m[1] as string);
+        expect(imports.filter((i) => i.includes("/editor")), file).toEqual([]);
+      }
+    }
+    expect(readFileSync(join(root, "ir", "identity.ts"), "utf8")).not.toMatch(/from "/);
+  });
+});

@@ -1,4 +1,4 @@
-# Y3 v2: bytecode and the VM (M8, version 2 in M9)
+# Y3 v2: bytecode and the VM (M8; version 2 in M9, 3 in M10)
 
 Bytecode is MIR in a portable, versioned, verified form. One MIR operation is one
 instruction. `compiler/bytecode.ts` defines the format; `runtime/vm.ts` runs it.
@@ -16,7 +16,7 @@ Y3BC 3
 
 | Field | Holds |
 |---|---|
-| `magic`, `version` | `Y3BC`, `2`. Any other version is refused with "rebuild from source". |
+| `magic`, `version` | `Y3BC`, `3`. Any other version is refused with "rebuild from source". |
 | `module`, `maxSteps`, `start` | the manifest's name, step limit and start pose |
 | `registers` | registers per step, at most |
 | `bodies` | the noun table of the main volume and of each callable plane: id, name and **resolved type** |
@@ -28,10 +28,11 @@ Y3BC 3
 | `callTypes` | the instantiated argument and result types of built-in calls (checked arithmetic and conversions need them) |
 | `edges` | CFG edges: kind, the machine instruction a trace reports, next pose, target |
 | `entries` | where each body starts |
-| `nodes` | **the debug map**: per CFG node, its body, full pose, sentence, plane and source span |
+| `nodes` | **the debug map**: per CFG node, its body, full pose, sentence, plane and source span; (v3) `ids`, the stable identities of its cell when an editor model built it (`docs/v2-source-mapping.md`) |
 | `blocks` | per block, its node, whether the node's step starts there, `code` (instructions) and `end` (terminator) |
 | `libraries` | (v2) foreign libraries: alias, project-relative path, **sha256** (`docs/v2-ffi.md`) |
 | `foreign` | (v2) 외부 declarations: id, library, name, symbol, FFI parameter and result types, `pure`, `frees` |
+| `revision` | (v3) the editor model's `ProgramRevision` the artifact was built from, or `null` |
 
 An instruction is `[opcode, operand…]`. Opcodes and operand kinds come from a single
 table, `OPS` in `compiler/bytecode.ts`: 36 opcodes, from `0 const` to `34 end`, and
@@ -188,6 +189,12 @@ changes. There is no cross-version loading: an artifact is rebuilt from source.
 keep their numbers) and the `libraries` and `foreign` tables. Version 1 was merged with
 M8, so its meaning is not changed in place: a `Y3BC 1` artifact is refused ("bytecode
 version 1 is not supported: this toolchain reads version 2; rebuild from source").
+
+**Version 3 (M10)** adds `ids` to debug-map nodes (document, module, plane, cell and
+statement ids, all opaque strings: the loader checks their shape and never interprets
+them) and the module's `revision`. Instructions and their meaning are unchanged. Versions
+1 and 2 are refused with "rebuild from source". A build without an editor model has no
+ids and a null revision, so plain builds stay reproducible.
 
 A WebAssembly artifact (`docs/v2-wasm.md`) carries its Y3BC text in a custom section and
 is verified through it.
