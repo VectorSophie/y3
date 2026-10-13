@@ -54,8 +54,11 @@ does the same from an HIR node.
 - `RenamePlane`;
 - `EditDeclaration` and `EditSignature`.
 
-It applies the transaction. If the program then has more errors than before, it undoes it
-and refuses.
+It applies the transaction, then compares errors by owner: document, code, and the cell
+(else the plane, else the file). The count alone is not enough, because one error fixed
+while another is made leaves it unchanged. If any owner has more errors than before, the
+service undoes the rename and refuses it. Messages and spans are not part of the key,
+because the rename itself changes them.
 
 Supported targets:
 - **Nouns.** Every cell of the noun's body, and the callable's signature when the noun is a

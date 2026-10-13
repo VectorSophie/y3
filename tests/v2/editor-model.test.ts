@@ -569,3 +569,44 @@ describe("layering", () => {
     expect(readFileSync(join(root, "ir", "identity.ts"), "utf8")).not.toMatch(/from "/);
   });
 });
+
+import { parseSentence } from "../../src/v2";
+
+describe("EditSentence keeps literals exactly (review of M10)", () => {
+  const ast = (s: string) => JSON.stringify(parseSentence(s).sentence, (k, v) => (k === "lint" ? undefined : typeof v === "bigint" ? `${v}n` : v));
+  const edit = (sentence: string) => {
+    const { model, doc, at } = open("⟦\n[x는 1이다.]\n[끝이다.]\n⟧\n");
+    const cell = at(0, 0);
+    model.apply({ kind: "EditSentence", cell, sentence });
+    // Serialize → parse: the document's own text, read back, has exactly the sentence meant.
+    const again = new ProgramModel({ nonce: "r" });
+    const d2 = again.open({ text: model.getDocument(doc).text });
+    const reread = again.getCell(again.cellAt(again.getDocument(d2).floors[0] as PlaneId, 0, 0) as CellId).sentence as string;
+    expect(ast(reread)).toBe(ast(sentence.trim()));
+    expect(modelViolations(model)).toEqual([]);
+    return { sentence: model.getCell(cell).sentence, output: model.run(doc).result.output };
+  };
+
+  it("whitespace inside a text literal is data: two spaces stay two spaces", () => {
+    expect(edit('"a  b"를 말한다.')).toEqual({ sentence: '"a  b"를 말한다.', output: ["a  b"] });
+    expect(edit('  "a\tb"를   말한다.  ')).toEqual({ sentence: '"a\tb"를 말한다.', output: ["a\tb"] });
+  });
+
+  it("brackets inside a text literal are data, not cell syntax", () => {
+    expect(edit('"[hello]"를 말한다.')).toEqual({ sentence: '"[hello]"를 말한다.', output: ["[hello]"] });
+    expect(edit('"⟦ x ⟧"를 말한다.')).toEqual({ sentence: '"⟦ x ⟧"를 말한다.', output: ["⟦ x ⟧"] });
+  });
+
+  it("escaped quotes and backslashes round-trip", () => {
+    expect(edit('"그는 \\"안녕\\" \\\\ 했다"를 말한다.')).toEqual({ sentence: '"그는 \\"안녕\\" \\\\ 했다"를 말한다.', output: ['그는 "안녕" \\ 했다'] });
+  });
+
+  it("anything but exactly one cell's sentence is refused, and the model is unchanged", () => {
+    const { model, doc, at } = open("⟦\n[x는 1이다.]\n[끝이다.]\n⟧\n");
+    const before = model.getDocument(doc).text;
+    for (const bad of ["x는 1이다.] [y는 2이다.", "x는 1이다.\ny는 2이다.", '"a\nb"를 말한다.', "x는 [1]이다.", "x는 1이다. y는 2이다.", "x는", "   "]) {
+      expect(() => model.apply({ kind: "EditSentence", cell: at(0, 0), sentence: bad }), JSON.stringify(bad)).toThrow(EditError);
+    }
+    expect(model.getDocument(doc).text).toBe(before);
+  });
+});

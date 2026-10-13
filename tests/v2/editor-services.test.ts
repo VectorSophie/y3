@@ -159,7 +159,9 @@ describe("hover, completion and semantic tokens", () => {
     expect(all.some((i) => i.kind === "callable" && i.label === "두배")).toBe(true);
     expect(all.some((i) => i.kind === "module" && i.label === "표준")).toBe(true);
     const text = model.getDocument(doc).text;
-    model.apply({ kind: "EditSentence", cell: at(0, 0), sentence: "값은 표준 줄" });
+    // Half-typed text is not a sentence: typing is a raw text edit, which keeps the cell.
+    model.setText(doc, text.replace("[값은 1이다.]", "[값은 표준 줄]"));
+    expect(model.getCell(at(0, 0)).sentence).toBe("값은 표준 줄");
     const s2 = model.sourceSpanOf(at(0, 0));
     const line = model.getDocument(doc).text.split("\n")[(s2?.start.line as number) - 1] as string;
     const col = line.indexOf("표준 줄") + "표준 줄".length + 1;
@@ -210,5 +212,19 @@ describe("several documents", () => {
     services.rename({ kind: "plane", plane, name: "넓이" }, "면적");
     expect(model.getDocument(main).text).toContain("[a는 기 면적: 3, 4]");
     expect(model.run(main as DocumentId).result.output).toEqual(["12"]);
+  });
+});
+
+describe("rename checks errors by owner, not by count", () => {
+  it("a rename that fixes one error but makes another is refused", () => {
+    const text = "⟦\n[위치는 3이다.]\n[끝이다.]\n⟧\n\n※\n\n자료 점 = { 가로: i64 }\n\n:함수: (p: 위치) → i64 ⟦\n[r은 1이다.]\n[r을 돌려준다.]\n⟧\n";
+    const model = new ProgramModel({ nonce: "o" });
+    const doc = model.open({ text });
+    const services = new EditorServices(model);
+    const errors = () => model.diagnostics(doc).filter((d) => d.severity === "error").map((d) => `${d.code} ${d.cell ? "cell" : d.plane ? "plane" : "-"}`);
+    expect(errors()).toHaveLength(1); // the signature's unknown type
+    expect(() => services.rename({ kind: "type", document: doc, name: "점" }, "위치")).toThrow(RenameError);
+    expect(model.getDocument(doc).text).toBe(text);
+    expect(errors()).toHaveLength(1);
   });
 });

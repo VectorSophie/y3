@@ -339,7 +339,13 @@ export class ProgramModel {
     }
     const parsed = parseDocument(text);
     if (!parsed.ok) throw new EditError(`the edit does not produce a valid document: ${parsed.diagnostics[0]?.message}`);
-    const attached = attach(structure, parsed.ast, { document: old.id, module: old.module });
+    let attached: ReturnType<typeof attach>;
+    try {
+      attached = attach(structure, parsed.ast, { document: old.id, module: old.module });
+    } catch (e) {
+      if (e instanceof StructureError) throw new EditError(e.message);
+      throw e;
+    }
     return { ...old, text, structure: attached.structure, ast: attached.ast, broken: null };
   }
 

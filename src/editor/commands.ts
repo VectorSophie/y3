@@ -1,5 +1,6 @@
 import type { CellId, DocumentId, NodeId, PlaneId } from "../ir/identity";
-import { PLANE_NAME_PATTERN } from "../language/document-parser";
+import { parseDocument, PLANE_NAME_PATTERN } from "../language/document-parser";
+import { parseSentence } from "../language/sentence-parser";
 import type { CellEntry, DeclEntry, NewId, PlaneEntry, SlotEntry, Structure } from "./structure";
 
 // Structural edits (docs/v2-editor-model.md § structural commands). A command is data;
@@ -30,6 +31,23 @@ export type Command =
   | { readonly kind: "EditSignature"; readonly plane: PlaneId; readonly signature: string };
 
 export class EditError extends Error {}
+
+// A sentence for one cell, as the parsers read it (docs/v2-editor-model.md § EditSentence).
+// The document parser decides whether the text is exactly one cell (a bracket or a line
+// break inside a text literal is data; outside one it is structure), and its cell text is
+// the sentence: whitespace is collapsed outside literals only. The sentence parser must
+// then accept it. Nothing here rewrites characters with a pattern of its own.
+export function cellSentence(input: string): string {
+  const text = input.replace(/^[ \t\r\n]+|[ \t\r\n]+$/gu, ""); // structural outer whitespace only
+  if (text.length === 0) throw new EditError("a sentence is not empty: use MakeBlank");
+  const parsed = parseDocument(`⟦\n[${text}]\n⟧\n`);
+  const cells = parsed.ok ? parsed.ast.volume[0]?.plane : null;
+  const only = cells && cells.kind === "inline" && cells.rows.length === 1 && cells.rows[0]?.cells.length === 1 ? cells.rows[0].cells[0] : null;
+  if (!only || only.text === null) throw new EditError(`[${text}] is not exactly one cell's sentence${parsed.ok ? "" : `: ${parsed.diagnostics[0]?.message}`}`);
+  const sentence = parseSentence(only.text);
+  if (!sentence.sentence) throw new EditError(`[${only.text}] is not a sentence: ${sentence.issues.find((i) => i.severity === "error")?.message ?? "it does not parse"}`);
+  return only.text;
+}
 
 type MutablePlane = { id: PlaneId; name: string | null; signature: string | null; comments: PlaneEntry["comments"]; grid: (CellEntry | null)[][] };
 
@@ -129,9 +147,7 @@ export class Draft {
       }
       case "EditSentence": {
         const { plane, x, y, entry } = this.cell(c.cell);
-        const text = c.sentence.trim().replace(/\s+/g, " ");
-        if (text.length === 0) throw new EditError("a sentence is not empty: use MakeBlank");
-        if (/[[\]⟦⟧\n]/u.test(text)) throw new EditError("a sentence cannot contain brackets or line breaks");
+        const text = cellSentence(c.sentence);
         // The same sentence keeps its statement's id; a changed one is a new statement.
         (plane.grid[y] as (CellEntry | null)[])[x] = { id: entry.id, node: entry.text === text && entry.node ? entry.node : this.newId("node"), text };
         return [];

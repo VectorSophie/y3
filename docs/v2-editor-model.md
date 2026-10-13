@@ -130,7 +130,7 @@ commands (or the row/column helpers).
 | `MakeVoid` | a *blank* cell's geometry is removed; its CellId ends |
 | `MoveCell` | same CellId; the destination must be VOID: an occupied destination (blank or not) is rejected, never overwritten |
 | `SwapCells` | both keep their CellIds and exchange positions (the explicit form of "move onto a blank") |
-| `EditSentence` | same CellId; a new statement NodeId when the sentence changes |
+| `EditSentence` | same CellId; a new statement NodeId when the sentence changes; see below for what is accepted |
 | `InsertRow`/`DeleteRow`/`InsertColumn`/`DeleteColumn` | new blank cells get new ids; deleted cells end |
 | `InsertPlane` | new PlaneId, blank cells with new ids |
 | `DeletePlane` | the PlaneId and its CellIds end; a named plane that is still placed or called is rejected |
@@ -138,6 +138,16 @@ commands (or the row/column helpers).
 | `RenamePlane` | same PlaneId; every `⟦ :name: ⟧` and call site follows; a conflicting name is rejected |
 | `ExtractNamedPlane` | a whole inline floor becomes a named plane: same PlaneId, same CellIds; the floor becomes a reference (a placement, no id) |
 | `InlineNamedPlane` | the floor gets a new inline plane: new PlaneId, new CellIds (copies) |
+
+`EditSentence` lets the parsers decide what the text means. It strips outer whitespace
+only, then the document parser must read `[text]` as exactly one cell. Inside a text
+literal, brackets, `⟦ ⟧`, repeated spaces and escapes are data; outside one, a bracket or
+a line break is structure. The resulting cell text is the parser's own: whitespace is
+collapsed outside literals and only there. The sentence parser must then accept it. No
+pattern of the model's own rewrites characters. When serialization respells a sentence
+(the formatter's canonical form), `attach` checks that it still parses to the same
+sentence, and refuses the edit otherwise. Half-typed text is not a sentence: an editor
+sends it as a raw text edit (`setText`), which keeps the cell's identity.
 
 Extraction works on whole floors, because a named plane composes as a whole floor in Y3;
 extracting part of a floor has no meaning-preserving form, so it is not offered.
@@ -342,12 +352,22 @@ compiler; a sentence printer, so structural edits inside a sentence (not just re
 can be made on the AST; an LSP transport; cross-document undo grouping per editor tab;
 and a persistent sidecar policy for git workflows (merges).
 
-## Open questions
-1. Should the parser report token spans inside a sentence, so services stop scanning
-   words?
-2. Should MIR instructions carry the HIR path of the expression they came from (a Y3BC
-   change)?
-3. Should history be per document rather than per model?
-4. Should sidecars be written next to sources by default, and how should they merge?
-5. `EditSentence` refuses brackets even inside string literals, to keep cell boundaries
-   unambiguous for every parser; is that too conservative?
+## Decisions after review
+1. **Token spans inside sentences** should come from the parser, not from editor word
+   scanning. Word scanning is acceptable for M10; parser token spans are the next step
+   before a serious LSP or IDE.
+2. **Expression-level MIR provenance** is deferred: statement-level provenance is enough
+   for the first 3D IDE, and Y3BC is not bumped for it unless debugger UX needs it.
+3. **Undo history stays per model**, so a cross-document rename stays one atomic
+   transaction.
+4. **The identity sidecar stays optional and untracked by default**: editor metadata, like a
+   cache. Git collaboration never depends on merging opaque ids. A merge strategy is
+   designed only if persistent shared identity becomes a requirement.
+5. **Brackets in `EditSentence`** are allowed inside literals: parser context decides, not
+   raw characters (above).
+
+The review also found that `EditSentence` collapsed whitespace with a regex over the
+whole sentence, which changed text literals (`"a  b"` became `"a b"`), and that a raw
+bracket ban rejected valid literals. Both were replaced by the parser-aware rule above.
+The rename check compared error counts, which misses one error fixed while another is
+made; it now compares errors by owner (below and in `docs/v2-lsp-services.md`).

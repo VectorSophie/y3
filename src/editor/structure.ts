@@ -1,6 +1,9 @@
 import type { CellAst, Comment, DeclarationAst, DefinitionAst, DocumentAst, InlinePlaneAst, PlaneSlotAst, Span } from "../language/ast";
 import type { CellId, CellIds, DocumentId, ModuleId, NodeId, PlaneId } from "../ir/identity";
 import { canonicalDeclarationOrder, canonicalDefinitionOrder } from "../format/formatter";
+import { parseSentence } from "../language/sentence-parser";
+
+const sentenceKey = (text: string) => JSON.stringify(parseSentence(text).sentence, (k, v) => (k === "lint" ? undefined : typeof v === "bigint" ? `${v}n` : v));
 
 // A document's structure with its identities (docs/v2-editor-model.md). It mirrors the
 // layout AST one to one (volume slots, planes, rows, cells, declarations, comments) and
@@ -151,6 +154,8 @@ export function attach(s: Structure, ast: DocumentAst, owner: { document: Docume
         cells: row.cells.map((c, x) => {
           const e = entries[x] ?? fail(`a hole in ${id}`);
           if ((c.text === null) !== (e.text === null)) fail(`blank/non-blank at ${id} (${x},${y})`);
+          // The formatter may respell a sentence, never change it: the parse must be the same.
+          if (c.text !== null && e.text !== null && c.text !== e.text && sentenceKey(c.text) !== sentenceKey(e.text)) fail(`the sentence at ${id} (${x},${y}) changed meaning in serialization`);
           // A canonical respelling keeps the statement's id; it is the same sentence.
           (grid[y] as CellEntry[]).push({ ...e, text: c.text });
           const ids: CellIds = { document: owner.document, module: owner.module, plane: id, cell: e.id, node: e.node };

@@ -485,7 +485,20 @@ export class EditorServices {
   rename(symbol: SymbolRef, to: string): Command[] {
     if (!/^[\p{L}_][\p{L}\p{N}_]*$/u.test(to)) throw new RenameError(`'${to}' is not a name`);
     const commands = this.renameCommands(symbol, to);
-    const errors = () => this.model.documents().reduce((n, d) => n + this.model.diagnostics(d).filter((x) => x.severity === "error").length, 0);
+    // Errors by owner, not by count: one error fixed and another made would balance a count.
+    // An error is owned by its document, code and element (cell, else plane); messages and
+    // spans change with the rename itself, so they are not part of it.
+    const errors = () => {
+      const keys = new Map<string, number>();
+      for (const d of this.model.documents()) {
+        for (const x of this.model.diagnostics(d)) {
+          if (x.severity !== "error") continue;
+          const key = `${x.document}|${x.code}|${x.cell ?? x.plane ?? x.path ?? "-"}`;
+          keys.set(key, (keys.get(key) ?? 0) + 1);
+        }
+      }
+      return keys;
+    };
     const before = errors();
     if (commands.length === 0) return [];
     try {
@@ -494,7 +507,8 @@ export class EditorServices {
       if (e instanceof EditError) throw new RenameError(e.message);
       throw e;
     }
-    if (errors() > before) {
+    const after = errors();
+    if ([...after].some(([key, n]) => n > (before.get(key) ?? 0))) {
       this.model.undo();
       throw new RenameError(`renaming '${symbol.kind === "builtin" ? symbol.id : symbol.kind === "module" ? symbol.alias : symbol.name}' to '${to}' would break the program: the new name is taken or captured`);
     }
