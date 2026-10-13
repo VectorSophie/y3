@@ -108,7 +108,7 @@ describe("WASM artifacts are not trusted on their own", () => {
   const bytes = wasmArtifact(c);
 
   it("carry their bytecode, and build reproducibly", () => {
-    expect(new TextDecoder().decode(readCustomSection(bytes, WASM_SECTION)!)).toMatch(/^Y3BC 2\n/);
+    expect(new TextDecoder().decode(readCustomSection(bytes, WASM_SECTION)!)).toMatch(/^Y3BC 3\n/);
     expect(wasmArtifact(c)).toEqual(bytes);
     expect(() => new WebAssembly.Module(bytes as Uint8Array<ArrayBuffer>)).not.toThrow();
   });

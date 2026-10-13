@@ -1,3 +1,5 @@
+import type { CellIds } from "../ir/identity";
+
 // Syntax tree of a Y3 document. It records what was written (including comments and
 // whether a plane was inline or referenced) but nothing about how a program runs.
 
@@ -11,6 +13,9 @@ export type CellAst = {
   // collapsed to single spaces and trimmed.
   text: string | null;
   span: Span;
+  // Stable identities, attached by the editor model (src/editor) and carried by the
+  // compiler into provenance, the debug map and traces. Never set by the parser.
+  ids?: CellIds;
 };
 
 export type RowAst = { cells: CellAst[]; span: Span };

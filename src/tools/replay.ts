@@ -15,7 +15,7 @@ import { sha256 } from "./sha256";
 
 export const REPLAY_MAGIC = "Y3REPLAY";
 export const REPLAY_VERSION = 1;
-export const TOOLCHAIN = "y3 0.1.0 (Y3BC 2)";
+export const TOOLCHAIN = "y3 0.1.0 (Y3BC 3)";
 
 export class ReplayError extends Error {}
 

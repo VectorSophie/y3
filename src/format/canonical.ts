@@ -7,8 +7,27 @@ import { formatFloat } from "../semantics/values";
 // if it parses to exactly the same sentence as the original, and a declaration's or a
 // signature's only if it parses at all (otherwise the text is kept as written).
 
+// `rename`: a type name spelled anew (a semantic rename of a type, docs/v2-lsp-services.md).
+type Rename = { readonly from: string; readonly to: string } | undefined;
+let renaming: Rename;
+const typeName = (path: readonly string[]) => (renaming && path.length === 1 && path[0] === renaming.from ? renaming.to : path.join(" "));
 const typeText = (t: TypeAst): string =>
-  t.kind === "array" ? `[${typeText(t.element)}; ${t.length}]` : t.kind === "slice" ? `[]${typeText(t.element)}` : `${t.path.join(" ")}${t.args.length ? `<${t.args.map(typeText).join(", ")}>` : ""}`;
+  t.kind === "array" ? `[${typeText(t.element)}; ${t.length}]` : t.kind === "slice" ? `[]${typeText(t.element)}` : `${typeName(t.path)}${t.args.length ? `<${t.args.map(typeText).join(", ")}>` : ""}`;
+
+// A declaration or signature with one type renamed: canonical text, or null when it does
+// not parse (then nothing can be renamed safely).
+export function renameTypeIn(text: string, kind: "declaration" | "signature", from: string, to: string): string | null {
+  renaming = { from, to };
+  try {
+    const parses = kind === "signature" ? (() => (parseSignature(text), true))() : (() => (text.startsWith(`${FOREIGN_KEYWORD} `) ? parseForeignDeclaration(text) : parseTypeDeclaration(text), true))();
+    return parses ? (kind === "signature" ? canonicalSignature(text) : canonicalDeclaration(text)) : null;
+  } catch (e) {
+    if (e instanceof DeclarationError) return null;
+    throw e;
+  } finally {
+    renaming = undefined;
+  }
+}
 
 // "자료 점 = { 가로: i64, 세로: i64 }", "자료 모양<T> = 원(T) | 빈것".
 export function canonicalDeclaration(text: string): string {
@@ -21,7 +40,7 @@ export function canonicalDeclaration(text: string): string {
       return [`${FOREIGN_KEYWORD} ${f.library} ${f.name} (${params})${f.result ? ` → ${typeText(f.result)}` : ""} = ${f.symbol}`, ...attrs].join(" ");
     }
     const d = parseTypeDeclaration(text);
-    const head = `자료 ${d.name}${d.params.length ? `<${d.params.join(", ")}>` : ""} = `;
+    const head = `자료 ${typeName([d.name])}${d.params.length ? `<${d.params.join(", ")}>` : ""} = `;
     if (d.body.kind === "record") return `${head}{ ${d.body.fields.map((f) => `${f.name}: ${typeText(f.type)}`).join(", ")} }`.replace("{  }", "{}");
     return head + d.body.variants.map((v) => (v.fields.length ? `${v.name}(${v.fields.map(typeText).join(", ")})` : v.name)).join(" | ");
   } catch (e) {

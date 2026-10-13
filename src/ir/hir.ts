@@ -1,4 +1,5 @@
 import type { Span } from "../language/ast";
+import type { CellIds } from "./identity";
 import type { Compass, Relative, Turn } from "../space/orientation";
 import type { Coordinate } from "../space/manifest";
 import type { ConcreteValue } from "../semantics/values";
@@ -16,6 +17,7 @@ export type Provenance = {
   readonly plane: { readonly slot: number; readonly name: string | null }; // floor index; named plane, if referenced
   readonly cell: Coordinate;
   readonly source: string; // the cell's sentence as written
+  readonly ids?: CellIds; // the cell's stable identities, when an editor model built the AST
 };
 
 export type NounId = number;

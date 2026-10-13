@@ -1,5 +1,6 @@
 import type { Coordinate, Manifest, Pose } from "../space/manifest";
 import type { Span } from "../language/ast";
+import type { CellIds } from "../ir/identity";
 import type { CompiledProgram } from "../ir/program";
 import type { Space } from "../space/volume";
 import type { BodyId, Edge, Target } from "../compiler/cfg";
@@ -26,6 +27,7 @@ export type NodeInfo = {
   readonly sentence: string | null; // null for a blank cell
   readonly plane: string | null;
   readonly span: Span | null;
+  readonly ids?: CellIds; // the cell's stable identities, when the program was built by an editor model
 };
 
 export type Executable = {
@@ -274,7 +276,7 @@ export function runSteps(exe: Executable, program: CompiledProgram, manifest: Ma
       taken = { instruction: NOP, next, target: { kind: "void", at: next.position } };
     }
     steps += 1;
-    trace.push({ step: steps, at: position, orientation: node.pose.orientation, cell: node.sentence, instruction: taken.instruction, next: taken.next, effects: rt.effects(), frame });
+    trace.push({ step: steps, at: position, orientation: node.pose.orientation, cell: node.sentence, instruction: taken.instruction, next: taken.next, effects: rt.effects(), frame, ...(node.ids ? { ids: node.ids } : {}) });
     machine = stepOutcome(steps, maxSteps, position, taken.next, taken.target.kind === "halt", taken.target.kind === "void");
     target = taken.target;
   }

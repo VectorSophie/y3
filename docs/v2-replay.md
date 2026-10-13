@@ -44,7 +44,7 @@ diagnostics. Pure foreign calls (`순수`) leave no event.
 
 ```
 Y3REPLAY 1
-{"magic":"Y3REPLAY","version":1,"toolchain":"y3 0.1.0 (Y3BC 2)",
+{"magic":"Y3REPLAY","version":1,"toolchain":"y3 0.1.0 (Y3BC 3)",
  "program":"<sha256 of the Y3BC artifact>",
  "capabilities":{"stdin":true,"filesystem":true,"clock":true,"ffi":true},
  "events":[…],"integrity":"<sha256 of the events>"}

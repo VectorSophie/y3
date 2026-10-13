@@ -1,4 +1,6 @@
-import type { Manifest, Pose } from "../space/manifest";
+import type { Coordinate, Manifest, Pose } from "../space/manifest";
+import type { CellIds } from "../ir/identity";
+import { lookup, type Space } from "../space/volume";
 import type { Expr, Stmt } from "../ir/hir";
 import { coordinateKey, type CompiledProgram } from "../ir/program";
 import { createRuntime, CALL_ENTRY, Stopped, type ProgramResult, type ProgramTraceEntry, type RunOptions } from "./core";
@@ -111,11 +113,19 @@ export function runProgram(program: CompiledProgram, manifest: Manifest, options
     const position = state.pose.position;
     rt.beginStep(state.steps + 1, position, rt.frame().body.cells.get(coordinateKey(position))?.at.source ?? "");
     const frame = rt.frame().label;
+    const space = rt.frame().body.space;
     // The machine's space and the innermost frame's body move together (call, return).
     if (state.space !== rt.frame().body.space) throw new Error("the machine and the frame stack disagree about the current space");
     const result = step(state, decode);
     state = result.state;
-    if (result.entry) trace.push({ ...result.entry, effects: rt.effects(), frame });
+    const ids = lookupIds(space, position);
+    if (result.entry) trace.push({ ...result.entry, effects: rt.effects(), frame, ...(ids ? { ids } : {}) });
   }
   return rt.finish(state.outcome as ProgramOutcome | null, state.steps, trace);
+}
+
+// The ids of the cell at a position, if the program carries identities.
+function lookupIds(space: Space, at: Coordinate): CellIds | undefined {
+  const found = lookup(space, at.x, at.y, at.z);
+  return found.kind === "cell" ? found.cell.ids : undefined;
 }

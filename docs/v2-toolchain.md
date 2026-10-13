@@ -1,4 +1,4 @@
-# Y3 v2: the toolchain (M8, M9)
+# Y3 v2: the toolchain (M8, M9, M10)
 
 One `y3` command, Go-style.
 
@@ -27,6 +27,18 @@ Programs that declare foreign libraries (`[foreign]`, `docs/v2-ffi.md`) read the
 inside the program's directory only, when they are checked, built and run. `y3 test`
 runs each test with its own directory as the library root. M8 keeps it on purpose: the differential tests compare the two engines
 on every fixture and on thousands of generated programs.
+
+## The editor model (M10)
+
+Editors do not drive the CLI. They use the library: `editor` in the package
+(`src/editor`), a `ProgramModel` with stable ids, structural edits, undo/redo, source
+maps, builds, runs and semantic services (`docs/v2-editor-model.md`,
+`docs/v2-source-mapping.md`, `docs/v2-lsp-services.md`). Its builds run the same
+pipeline as `y3 build`. The only difference is that the debug map carries each cell's ids
+and the build's revision (Y3BC 3). A plain `y3 build` has no ids and stays
+byte-for-byte reproducible. M10 adds no `y3 model` command: everything it would show is
+available as data through the API, and a dump command would be a second, unversioned
+format.
 
 ## Tests
 
